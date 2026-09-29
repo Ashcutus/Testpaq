@@ -2,7 +2,14 @@ import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { AnalysisResultSchema, TestpaqSchema, type AnalysisRun, type Testpaq, type TestpaqSummary } from "../src/shared/domain.js";
+import {
+  AnalysisInputSchema,
+  AnalysisResultSchema,
+  TestpaqSchema,
+  type AnalysisRun,
+  type Testpaq,
+  type TestpaqSummary,
+} from "../src/shared/domain.js";
 
 type DatabaseInstance = InstanceType<typeof Database>;
 
@@ -47,6 +54,12 @@ export class TestpaqStore {
         );
         CREATE INDEX analysis_runs_testpaq_idx ON analysis_runs(testpaq_id, created_at DESC);
         PRAGMA user_version = 1;
+      `);
+    }
+    if (version < 2) {
+      this.database.exec(`
+        ALTER TABLE analysis_runs ADD COLUMN input_snapshot_json TEXT;
+        PRAGMA user_version = 2;
       `);
     }
   }
@@ -103,10 +116,10 @@ export class TestpaqStore {
     this.database
       .prepare(
         `INSERT INTO analysis_runs
-          (id, testpaq_id, provider, model, prompt_version, status, disclosure, input_hash, created_at)
-         VALUES (@id, @testpaqId, @provider, @model, @promptVersion, @status, @disclosure, @inputHash, @createdAt)`,
+          (id, testpaq_id, provider, model, prompt_version, status, disclosure, input_hash, input_snapshot_json, created_at)
+         VALUES (@id, @testpaqId, @provider, @model, @promptVersion, @status, @disclosure, @inputHash, @inputSnapshot, @createdAt)`,
       )
-      .run(value);
+      .run({ ...value, inputSnapshot: value.inputSnapshot ? JSON.stringify(value.inputSnapshot) : null });
     return value;
   }
 
@@ -154,6 +167,7 @@ function mapRun(row: Record<string, string | null>): AnalysisRun {
     status: row.status as AnalysisRun["status"],
     disclosure: row.disclosure!,
     inputHash: row.input_hash!,
+    inputSnapshot: row.input_snapshot_json ? AnalysisInputSchema.parse(JSON.parse(row.input_snapshot_json)) : undefined,
     result: row.result_json ? AnalysisResultSchema.parse(JSON.parse(row.result_json)) : undefined,
     errorCode: row.error_code ?? undefined,
     createdAt: row.created_at!,

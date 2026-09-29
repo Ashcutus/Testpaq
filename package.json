@@ -7,7 +7,7 @@
     "testpaq": "dist-server/server/cli.js"
   },
   "scripts": {
-    "dev": "concurrently -k -n api,ui -c cyan,magenta \"TESTPAQ_DEV_ORIGIN=http://127.0.0.1:5173 TESTPAQ_SESSION_TOKEN=dev-session TESTPAQ_ENABLE_FIXTURES=1 tsx watch server/cli.ts --no-open --port 4178\" \"vite --host 127.0.0.1\"",
+    "dev": "TESTPAQ_DEV_ORIGIN=http://127.0.0.1:5173 TESTPAQ_SESSION_TOKEN=dev-session TESTPAQ_ENABLE_FIXTURES=1 concurrently -k -n api,ui -c cyan,magenta \"tsx watch server/cli.ts --no-open --port 4178\" \"vite --host 127.0.0.1\"",
     "build": "npm run build:client && npm run build:server",
     "build:client": "vite build",
     "build:server": "tsc -p tsconfig.server.json",

@@ -2,9 +2,11 @@ import { CheckCircle2, CircleSlash2, HelpCircle, Plus, RotateCcw } from "lucide-
 import { useState } from "react";
 import { label } from "../../lib/utils";
 import type { Question, Testpaq } from "../../shared/domain";
+import { activeRequirementNumbers } from "../../shared/export";
 import { Button } from "../ui/Button";
 
 export function QuestionsPanel({ item, update }: { item: Testpaq; update: (recipe: (item: Testpaq) => Testpaq) => void }) {
+  const requirementNumbers = activeRequirementNumbers(item);
   const [filter, setFilter] = useState<Question["status"] | "all">("open");
   const visible = item.questions.filter((question) => filter === "all" || question.status === filter);
   const add = () =>
@@ -56,7 +58,9 @@ export function QuestionsPanel({ item, update }: { item: Testpaq; update: (recip
                 <span className={`origin origin-${question.origin}`}>{label(question.origin)}</span>
                 <span>
                   {question.requirementId
-                    ? `Linked to R${item.requirements.findIndex((value) => value.id === question.requirementId) + 1}`
+                    ? requirementNumbers.has(question.requirementId)
+                      ? `Linked to R${requirementNumbers.get(question.requirementId)}`
+                      : "Linked to inactive requirement"
                     : question.scenarioId
                       ? "Linked to scenario"
                       : "Testpaq-wide"}

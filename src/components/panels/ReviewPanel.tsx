@@ -14,28 +14,39 @@ import {
   UserRound,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { label } from "../../lib/utils";
 import type { Scenario, Testpaq } from "../../shared/domain";
+import { activeRequirementNumbers } from "../../shared/export";
 import { Button } from "../ui/Button";
 
-type Filter = "all" | Scenario["origin"] | Scenario["review"];
-
 export function ReviewPanel({ item, update }: { item: Testpaq; update: (recipe: (item: Testpaq) => Testpaq) => void }) {
-  const [filter, setFilter] = useState<Filter>("all");
+  const [originFilter, setOriginFilter] = useState<Scenario["origin"] | "all">("all");
+  const [reviewFilter, setReviewFilter] = useState<Scenario["review"] | "all">("all");
+  const [coverageFilter, setCoverageFilter] = useState<"all" | "unlinked">("all");
+  const [categoryFilter, setCategoryFilter] = useState<Scenario["category"] | "all">("all");
+  const [destinationFilter, setDestinationFilter] = useState<"all" | "manual" | "qase" | "automation">("all");
+  const [riskOnly, setRiskOnly] = useState(false);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [focusedId, setFocusedId] = useState<string>();
   const [expanded, setExpanded] = useState<string>();
   const [undo, setUndo] = useState<Testpaq>();
+  const rowRefs = useRef(new Map<string, HTMLElement>());
+  const requirementNumbers = activeRequirementNumbers(item);
   const visible = useMemo(
     () =>
       item.scenarios.filter(
         (scenario) =>
-          (filter === "all" || scenario.origin === filter || scenario.review === filter) &&
+          (originFilter === "all" || scenario.origin === originFilter) &&
+          (reviewFilter === "all" || scenario.review === reviewFilter) &&
+          (coverageFilter === "all" || scenario.requirementIds.length === 0) &&
+          (categoryFilter === "all" || scenario.category === categoryFilter) &&
+          (destinationFilter === "all" || scenario.destinations[destinationFilter]) &&
+          (!riskOnly || scenario.risks.length > 0) &&
           `${scenario.title} ${scenario.expectedOutcome}`.toLowerCase().includes(query.toLowerCase()),
       ),
-    [item.scenarios, filter, query],
+    [item.scenarios, originFilter, reviewFilter, coverageFilter, categoryFilter, destinationFilter, riskOnly, query],
   );
 
   const mutate = (ids: string[], recipe: (scenario: Scenario) => void) => {
@@ -49,17 +60,22 @@ export function ReviewPanel({ item, update }: { item: Testpaq; update: (recipe: 
       return draft;
     });
   };
-  const activeIds = selected.size ? [...selected] : focusedId ? [focusedId] : [];
+  const activeFocusedId = visible.some((scenario) => scenario.id === focusedId) ? focusedId : visible[0]?.id;
+  const activeIds = selected.size ? [...selected] : activeFocusedId ? [activeFocusedId] : [];
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
-      if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.isContentEditable) return;
-      const currentIndex = visible.findIndex((scenario) => scenario.id === focusedId);
+      const row = target.closest<HTMLElement>("[data-scenario-id]");
+      if (!row || row !== target || target.isContentEditable) return;
+      const currentIndex = visible.findIndex((scenario) => scenario.id === activeFocusedId);
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         const delta = event.key === "ArrowDown" ? 1 : -1;
         const next = visible[Math.max(0, Math.min(visible.length - 1, currentIndex + delta))];
-        if (next) setFocusedId(next.id);
+        if (next) {
+          setFocusedId(next.id);
+          rowRefs.current.get(next.id)?.focus();
+        }
         return;
       }
       if (!activeIds.length) return;
@@ -110,19 +126,22 @@ export function ReviewPanel({ item, update }: { item: Testpaq; update: (recipe: 
       setExpanded(scenario.id);
       return draft;
     });
-  const filterValues: Filter[] = ["all", "proposed", "accepted", "rejected", "explicit", "inferred", "human"];
   return (
     <div className="review-layout">
       <aside className="review-sidebar">
         <p className="eyebrow">View</p>
-        {filterValues.map((value) => (
-          <button key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>
-            <span>{label(value)}</span>
-            <em>
-              {value === "all"
-                ? item.scenarios.length
-                : item.scenarios.filter((scenario) => scenario.origin === value || scenario.review === value).length}
-            </em>
+        <p className="eyebrow">Origin</p>
+        {(["all", "explicit", "inferred", "human"] as const).map((value) => (
+          <button key={value} aria-pressed={originFilter === value} onClick={() => setOriginFilter(value)}>
+            <span>{value === "all" ? "All origins" : label(value)}</span>
+            <em>{value === "all" ? item.scenarios.length : item.scenarios.filter((scenario) => scenario.origin === value).length}</em>
+          </button>
+        ))}
+        <p className="eyebrow">Review status</p>
+        {(["all", "proposed", "accepted", "rejected"] as const).map((value) => (
+          <button key={value} aria-pressed={reviewFilter === value} onClick={() => setReviewFilter(value)}>
+            <span>{value === "all" ? "All statuses" : label(value)}</span>
+            <em>{value === "all" ? item.scenarios.length : item.scenarios.filter((scenario) => scenario.review === value).length}</em>
           </button>
         ))}
         <div className="coverage-gap">
@@ -147,6 +166,52 @@ export function ReviewPanel({ item, update }: { item: Testpaq; update: (recipe: 
             <span className="sr-only">Search scenarios</span>
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter scenarios…" />
           </label>
+          <label className="review-filter">
+            <span className="sr-only">Filter by category</span>
+            <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value as typeof categoryFilter)}>
+              <option value="all">All categories</option>
+              {[...new Set(item.scenarios.map((scenario) => scenario.category))].sort().map((category) => (
+                <option value={category} key={category}>
+                  {label(category)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="review-filter">
+            <span className="sr-only">Filter by intended destination</span>
+            <select value={destinationFilter} onChange={(event) => setDestinationFilter(event.target.value as typeof destinationFilter)}>
+              <option value="all">All destinations</option>
+              <option value="manual">Manual</option>
+              <option value="qase">Qase candidate</option>
+              <option value="automation">Automation candidate</option>
+            </select>
+          </label>
+          <label className="review-filter">
+            <span className="sr-only">Filter by requirement coverage</span>
+            <select value={coverageFilter} onChange={(event) => setCoverageFilter(event.target.value as typeof coverageFilter)}>
+              <option value="all">All coverage</option>
+              <option value="unlinked">Unlinked only</option>
+            </select>
+          </label>
+          <button className="risk-filter" aria-pressed={riskOnly} onClick={() => setRiskOnly((current) => !current)}>
+            <AlertTriangle size={14} /> Risk only
+          </button>
+          <button
+            className="risk-filter"
+            onClick={() =>
+              setSelected((current) => {
+                const next = new Set(current);
+                const allSelected = visible.length > 0 && visible.every((scenario) => next.has(scenario.id));
+                for (const scenario of visible) {
+                  if (allSelected) next.delete(scenario.id);
+                  else next.add(scenario.id);
+                }
+                return next;
+              })
+            }
+          >
+            {visible.length > 0 && visible.every((scenario) => selected.has(scenario.id)) ? "Deselect shown" : "Select shown"}
+          </button>
           <div className="shortcut-hints">
             <span>
               <kbd>A</kbd> accept
@@ -229,13 +294,18 @@ export function ReviewPanel({ item, update }: { item: Testpaq; update: (recipe: 
             Action applied · Undo
           </button>
         )}
-        <div className="scenario-list" role="listbox" aria-label="Scenarios" aria-multiselectable="true">
+        <div className="scenario-list" role="list" aria-label="Scenarios">
           {visible.map((scenario) => (
             <ScenarioRow
               key={scenario.id}
               scenario={scenario}
               item={item}
-              focused={focusedId === scenario.id}
+              requirementNumbers={requirementNumbers}
+              focused={activeFocusedId === scenario.id}
+              rowRef={(element) => {
+                if (element) rowRefs.current.set(scenario.id, element);
+                else rowRefs.current.delete(scenario.id);
+              }}
               selected={selected.has(scenario.id)}
               expanded={expanded === scenario.id}
               onFocus={() => setFocusedId(scenario.id)}
@@ -262,7 +332,9 @@ export function ReviewPanel({ item, update }: { item: Testpaq; update: (recipe: 
 function ScenarioRow({
   scenario,
   item,
+  requirementNumbers,
   focused,
+  rowRef,
   selected,
   expanded,
   onFocus,
@@ -273,7 +345,9 @@ function ScenarioRow({
 }: {
   scenario: Scenario;
   item: Testpaq;
+  requirementNumbers: Map<string, number>;
   focused: boolean;
+  rowRef: (element: HTMLElement | null) => void;
   selected: boolean;
   expanded: boolean;
   onFocus: () => void;
@@ -283,9 +357,8 @@ function ScenarioRow({
   mutate: (recipe: (scenario: Scenario) => void) => void;
 }) {
   const Icon = scenario.origin === "human" ? UserRound : scenario.origin === "inferred" ? Bot : Save;
-  const linked = scenario.requirementIds
-    .map((id) => item.requirements.findIndex((requirement) => requirement.id === id) + 1)
-    .filter(Boolean);
+  const linked = scenario.requirementIds.map((id) => requirementNumbers.get(id)).filter((value): value is number => value !== undefined);
+  const hasInactiveLink = linked.length < scenario.requirementIds.length;
   const patch = (recipe: (value: Scenario) => void) =>
     update((draft) => {
       const value = draft.scenarios.find((entry) => entry.id === scenario.id)!;
@@ -297,15 +370,18 @@ function ScenarioRow({
   return (
     <article
       className={`scenario-row origin-border-${scenario.origin} ${focused ? "is-focused" : ""} review-${scenario.review}`}
-      role="option"
-      aria-selected={selected}
+      role="listitem"
+      data-scenario-id={scenario.id}
+      ref={rowRef}
       tabIndex={focused ? 0 : -1}
       onClick={onFocus}
+      onFocus={onFocus}
     >
       <div className="scenario-summary">
         <button
           className="select-button"
           aria-label={selected ? "Deselect scenario" : "Select scenario"}
+          aria-pressed={selected}
           onClick={(event) => {
             event.stopPropagation();
             onSelect(!selected);
@@ -313,7 +389,14 @@ function ScenarioRow({
         >
           {selected ? <Square className="selected-square" size={16} /> : <Square size={16} />}
         </button>
-        <button className="expand-button" aria-label={expanded ? "Collapse scenario" : "Expand scenario"} onClick={onExpand}>
+        <button
+          className="expand-button"
+          aria-label={expanded ? "Collapse scenario" : "Expand scenario"}
+          onClick={(event) => {
+            event.stopPropagation();
+            onExpand();
+          }}
+        >
           {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
         </button>
         <span className={`origin-icon origin-${scenario.origin}`}>
@@ -324,7 +407,16 @@ function ScenarioRow({
           <span>
             <em className={`origin origin-${scenario.origin}`}>{label(scenario.origin)}</em>
             <span>{label(scenario.category)}</span>
-            {linked.length ? <span>R{linked.join(", R")}</span> : <span>Additional coverage</span>}
+            {linked.length ? (
+              <span>
+                R{linked.join(", R")}
+                {hasInactiveLink ? " · inactive link" : ""}
+              </span>
+            ) : hasInactiveLink ? (
+              <span>Inactive requirement link</span>
+            ) : (
+              <span>Additional coverage</span>
+            )}
             {scenario.risks.length > 0 && (
               <span className="risk">
                 <AlertTriangle size={12} /> Risk
@@ -346,7 +438,7 @@ function ScenarioRow({
           </button>
           <button
             aria-pressed={scenario.destinations.qase}
-            title="Intended for Qase; not yet created"
+            aria-label="Qase candidate; not yet created"
             onClick={() =>
               mutate((value) => {
                 value.destinations.qase = !value.destinations.qase;
@@ -354,11 +446,11 @@ function ScenarioRow({
             }
           >
             <Circle size={13} />
-            Qase
+            Qase candidate
           </button>
           <button
             aria-pressed={scenario.destinations.automation}
-            title="Automation candidate; not yet automated"
+            aria-label="Automation candidate; not yet automated"
             onClick={() =>
               mutate((value) => {
                 value.destinations.automation = !value.destinations.automation;
@@ -366,7 +458,7 @@ function ScenarioRow({
             }
           >
             <Code2 size={13} />
-            Automation
+            Automation candidate
           </button>
         </div>
         <div className="review-actions">

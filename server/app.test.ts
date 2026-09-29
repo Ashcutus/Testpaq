@@ -80,7 +80,11 @@ describe("local API security and validation", () => {
     });
     expect(response.status).toBe(502);
     expect(store.get(fixture.id)).toEqual(fixture);
-    expect(store.getRuns(fixture.id)[0]).toMatchObject({ status: "failed", errorCode: "invalid_analysis" });
+    expect(store.getRuns(fixture.id)[0]).toMatchObject({
+      status: "failed",
+      errorCode: "invalid_analysis",
+      inputSnapshot: { testpaqId: fixture.id, ticket: fixture.ticket, requirements: fixture.requirements },
+    });
     store.close();
   });
 });

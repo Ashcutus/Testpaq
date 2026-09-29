@@ -17,65 +17,155 @@ type Section = "ticket" | "review" | "questions" | "export" | "history";
 
 export function TestpaqWorkbench({ id, config }: { id: string; config?: AppConfig }) {
   const [item, setItem] = useState<Testpaq>();
+  const [loadedId, setLoadedId] = useState<string>();
   const [section, setSection] = useState<Section>("ticket");
   const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
   const [error, setError] = useState("");
   const [analysisOpen, setAnalysisOpen] = useState(false);
   const [analysing, setAnalysing] = useState(false);
   const [historyVersion, setHistoryVersion] = useState(0);
-  const loaded = useRef(false);
-  const queued = useRef<Testpaq | undefined>(undefined);
+  const [revision, setRevision] = useState(0);
+  const itemRef = useRef<Testpaq | undefined>(undefined);
+  const revisionRef = useRef(0);
+  const savedRevisionRef = useRef(0);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const saveChainRef = useRef<Promise<unknown>>(Promise.resolve());
+  const mountedRef = useRef(true);
+  const analysisControllerRef = useRef<AbortController | undefined>(undefined);
 
-  useEffect(() => {
-    loaded.current = false;
-    api
-      .get(id)
-      .then((value) => {
-        setItem(value);
-        queued.current = value;
-        loaded.current = true;
-      })
-      .catch((reason: Error) => setError(reason.message));
-  }, [id]);
-  useEffect(() => {
-    if (!item || !loaded.current || queued.current === item) return;
+  const flushSave = useCallback(async (keepalive = false) => {
+    const snapshot = itemRef.current;
+    const targetRevision = revisionRef.current;
+    if (!snapshot || targetRevision <= savedRevisionRef.current) return snapshot;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setSaveState("saving");
-    const timer = setTimeout(async () => {
-      try {
-        const saved = await api.save(item);
-        queued.current = saved;
-        setItem(saved);
-        setSaveState("saved");
-      } catch (reason) {
+    const save = saveChainRef.current.catch(() => undefined).then(() => api.save(snapshot, keepalive));
+    saveChainRef.current = save.then(
+      () => undefined,
+      () => undefined,
+    );
+    try {
+      const saved = await save;
+      savedRevisionRef.current = Math.max(savedRevisionRef.current, targetRevision);
+      if (revisionRef.current === targetRevision) {
+        itemRef.current = saved;
+        if (mountedRef.current) {
+          setItem(saved);
+          setSaveState("saved");
+        }
+      }
+      return saved;
+    } catch (reason) {
+      if (mountedRef.current) {
         setSaveState("error");
         setError((reason as Error).message);
       }
-    }, 650);
-    return () => clearTimeout(timer);
-  }, [item]);
+      throw reason;
+    }
+  }, []);
 
-  const update = useCallback(
-    (recipe: (current: Testpaq) => Testpaq) => setItem((current) => (current ? recipe(structuredClone(current)) : current)),
-    [],
-  );
+  useEffect(() => {
+    let active = true;
+    mountedRef.current = true;
+    void flushSave(true).catch(() => undefined);
+    itemRef.current = undefined;
+    revisionRef.current = 0;
+    savedRevisionRef.current = 0;
+    api
+      .get(id)
+      .then((value) => {
+        if (!active) return;
+        itemRef.current = value;
+        revisionRef.current = 0;
+        savedRevisionRef.current = 0;
+        setItem(value);
+        setRevision(0);
+        setLoadedId(id);
+      })
+      .catch((reason: Error) => {
+        if (active) setError(reason.message);
+      });
+    return () => {
+      active = false;
+    };
+  }, [id, flushSave]);
+
+  useEffect(() => {
+    if (!item || revision === 0) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => void flushSave().catch(() => undefined), 650);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [item, revision, flushSave]);
+
+  useEffect(() => {
+    const onPageHide = () => void flushSave(true).catch(() => undefined);
+    addEventListener("pagehide", onPageHide);
+    return () => {
+      mountedRef.current = false;
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      void flushSave(true).catch(() => undefined);
+      analysisControllerRef.current?.abort();
+      removeEventListener("pagehide", onPageHide);
+    };
+  }, [flushSave]);
+
+  const update = useCallback((recipe: (current: Testpaq) => Testpaq) => {
+    const current = itemRef.current;
+    if (!current) return;
+    const next = recipe(structuredClone(current));
+    if (next.status === "exported") {
+      next.status = "in_review";
+      delete next.exportedAt;
+    }
+    itemRef.current = next;
+    revisionRef.current += 1;
+    setRevision(revisionRef.current);
+    setItem(next);
+  }, []);
+  const exportMarkdown = async () => {
+    await flushSave();
+    const current = itemRef.current;
+    if (!current) return "";
+    const exported = structuredClone(current);
+    exported.status = "exported";
+    exported.exportedAt = new Date().toISOString();
+    itemRef.current = exported;
+    revisionRef.current += 1;
+    const exportRevision = revisionRef.current;
+    setRevision(exportRevision);
+    setItem(exported);
+    let saved: Testpaq | undefined;
+    try {
+      saved = await flushSave();
+    } catch {
+      throw new Error("The latest changes could not be saved. Export was cancelled; retry after saving.");
+    }
+    if (revisionRef.current !== exportRevision) throw new Error("The brief changed while it was being exported. Review it and retry.");
+    return renderMarkdown(saved ?? exported);
+  };
   const analyse = async () => {
     if (!item) return;
     setAnalysing(true);
     setError("");
+    const controller = new AbortController();
+    analysisControllerRef.current = controller;
     try {
-      const { result } = await api.analyse({ testpaqId: item.id, ticket: item.ticket, requirements: item.requirements });
+      const { result } = await api.analyse({ testpaqId: item.id, ticket: item.ticket, requirements: item.requirements }, controller.signal);
       update((current) => applyAnalysis(current, result));
       setAnalysisOpen(false);
       setSection("review");
       setHistoryVersion((value) => value + 1);
     } catch (reason) {
-      setError((reason as Error).message);
+      if ((reason as Error).name !== "AbortError") setError((reason as Error).message);
       setHistoryVersion((value) => value + 1);
     } finally {
+      analysisControllerRef.current = undefined;
       setAnalysing(false);
     }
   };
-  if (!item)
+  if (!item || loadedId !== id)
     return (
       <div className="loading-page">
         {error ? (
@@ -141,31 +231,28 @@ export function TestpaqWorkbench({ id, config }: { id: string; config?: AppConfi
           {section === "ticket" && <TicketPanel item={item} update={update} onAnalyse={() => setAnalysisOpen(true)} />}
           {section === "review" && <ReviewPanel item={item} update={update} />}
           {section === "questions" && <QuestionsPanel item={item} update={update} />}
-          {section === "export" && (
-            <ExportPanel
-              item={item}
-              markdown={renderMarkdown(item)}
-              onExport={() =>
-                update((current) => {
-                  current.status = "exported";
-                  current.exportedAt = new Date().toISOString();
-                  return current;
-                })
-              }
-            />
-          )}
+          {section === "export" && <ExportPanel item={item} markdown={renderMarkdown(item)} onExport={exportMarkdown} />}
           {section === "history" && <HistoryPanel testpaqId={item.id} version={historyVersion} />}
         </section>
       </div>
       <Dialog
         open={analysisOpen}
-        onOpenChange={setAnalysisOpen}
+        onOpenChange={(open) => {
+          if (open || !analysing) setAnalysisOpen(open);
+        }}
+        closeDisabled={analysing}
         title="Review data sent for analysis"
         description="Nothing is added until the response passes Testpaq's validation."
         footer={
           <>
-            <Button variant="ghost" onClick={() => setAnalysisOpen(false)} disabled={analysing}>
-              Cancel
+            <Button
+              variant="ghost"
+              onClick={() => {
+                if (analysing) analysisControllerRef.current?.abort();
+                setAnalysisOpen(false);
+              }}
+            >
+              {analysing ? "Cancel analysis" : "Cancel"}
             </Button>
             <Button
               onClick={analyse}

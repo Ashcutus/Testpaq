@@ -108,16 +108,21 @@ export function createApp(options: AppOptions) {
       promptVersion: "testpaq-analysis-v1",
       disclosure,
       inputHash,
+      inputSnapshot: input,
     });
     if (!options.provider) {
       options.store.failRun(run.id, "provider_not_configured");
       return context.json({ error: "OpenAI is not configured. Set OPENAI_API_KEY on the server and retry.", runId: run.id }, 503);
     }
     try {
-      const result = await options.provider.analyse(input);
+      const result = await options.provider.analyse(input, context.req.raw.signal);
       const completed = options.store.finishRun(run.id, normalizeResult(result));
       return context.json({ run: completed, result: completed.result });
     } catch (error) {
+      if (context.req.raw.signal.aborted || (error instanceof Error && error.name === "AbortError")) {
+        options.store.failRun(run.id, "cancelled");
+        return context.json({ error: "Analysis cancelled.", runId: run.id }, 409);
+      }
       const errorCode =
         error instanceof z.ZodError || (error instanceof Error && error.name === "ZodError") ? "invalid_analysis" : "provider_error";
       options.store.failRun(run.id, errorCode);

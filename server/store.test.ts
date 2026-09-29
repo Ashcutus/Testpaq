@@ -13,4 +13,22 @@ describe("TestpaqStore", () => {
     expect(store.database.pragma("foreign_keys", { simple: true })).toBe(1);
     store.close();
   });
+
+  it("persists the exact analysis input snapshot with a run", () => {
+    const store = new TestpaqStore(":memory:");
+    const fixture = makeFixture();
+    store.save(fixture);
+    const inputSnapshot = { testpaqId: fixture.id, ticket: fixture.ticket, requirements: fixture.requirements };
+    const run = store.startRun({
+      testpaqId: fixture.id,
+      provider: "test",
+      model: "test-model",
+      promptVersion: "test-v1",
+      disclosure: "Test snapshot",
+      inputHash: "abc123",
+      inputSnapshot,
+    });
+    expect(store.getRuns(fixture.id)[0]).toMatchObject({ id: run.id, inputSnapshot });
+    store.close();
+  });
 });

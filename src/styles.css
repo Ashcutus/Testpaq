@@ -874,15 +874,44 @@ fieldset legend {
   margin-bottom: 18px;
 }
 .review-toolbar {
-  height: 42px;
-  padding: 0 10px;
+  min-height: 42px;
+  padding: 7px 10px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 14px;
   border: 1px solid var(--border);
   border-radius: 8px 8px 0 0;
   background: var(--surface);
+}
+.review-filter select {
+  max-width: 165px;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+.risk-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 29px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.risk-filter[aria-pressed="true"] {
+  color: var(--amber);
+  border-color: var(--amber);
+  background: var(--amber-soft);
+}
+.review-sidebar .eyebrow {
+  margin: 16px 7px 5px;
+}
+.review-sidebar .eyebrow:first-child {
+  margin-top: 0;
 }
 .shortcut-hints {
   display: flex;
@@ -969,6 +998,10 @@ kbd {
 }
 .scenario-row.is-focused {
   box-shadow: inset 0 0 0 1px var(--accent);
+}
+.scenario-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 .origin-border-explicit {
   border-left-color: var(--accent);
