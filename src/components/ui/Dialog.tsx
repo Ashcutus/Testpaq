@@ -9,6 +9,7 @@ export function Dialog({
   description,
   children,
   footer,
+  closeDisabled = false,
 }: {
   open: boolean;
   onOpenChange: (value: boolean) => void;
@@ -16,18 +17,31 @@ export function Dialog({
   description?: string;
   children: ReactNode;
   footer?: ReactNode;
+  closeDisabled?: boolean;
 }) {
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="dialog-overlay" />
-        <DialogPrimitive.Content className="dialog-content">
+        <DialogPrimitive.Content
+          className="dialog-content"
+          onEscapeKeyDown={(event) => {
+            if (closeDisabled) event.preventDefault();
+          }}
+          onPointerDownOutside={(event) => {
+            if (closeDisabled) event.preventDefault();
+          }}
+        >
           <div className="dialog-heading">
             <div>
               <DialogPrimitive.Title>{title}</DialogPrimitive.Title>
               {description && <DialogPrimitive.Description>{description}</DialogPrimitive.Description>}
             </div>
-            <DialogPrimitive.Close className="icon-button" aria-label="Close">
+            <DialogPrimitive.Close
+              className="icon-button"
+              aria-label={closeDisabled ? "Analysis in progress" : "Close"}
+              disabled={closeDisabled}
+            >
               <X size={17} />
             </DialogPrimitive.Close>
           </div>

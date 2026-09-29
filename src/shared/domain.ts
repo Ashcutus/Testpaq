@@ -202,6 +202,7 @@ export type AnalysisRun = {
   status: "running" | "succeeded" | "failed";
   disclosure: string;
   inputHash: string;
+  inputSnapshot?: AnalysisInput;
   result?: AnalysisResult;
   errorCode?: string;
   createdAt: string;

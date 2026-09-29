@@ -22,32 +22,51 @@ export function HistoryPanel({ testpaqId, version }: { testpaqId: string; versio
         </div>
       </div>
       <div className="history-list">
-        {runs.map((run) => (
-          <article className="history-row" key={run.id}>
-            <span className={`history-icon history-${run.status}`}>
-              {run.status === "succeeded" ? (
-                <CheckCircle2 size={17} />
-              ) : run.status === "failed" ? (
-                <AlertCircle size={17} />
-              ) : (
-                <LoaderCircle className="spin" size={17} />
-              )}
-            </span>
-            <div>
-              <strong>
-                {run.provider} · {run.model}
-              </strong>
-              <span>{run.disclosure}</span>
-              <small>
-                {run.promptVersion} · Input {run.inputHash.slice(0, 10)}…
-              </small>
-            </div>
-            <div className="history-time">
-              <span className={`status status-${run.status}`}>{label(run.status)}</span>
-              <time>{formatRelative(run.createdAt)}</time>
-            </div>
-          </article>
-        ))}
+        {runs.map((run) => {
+          const displayStatus = run.errorCode === "cancelled" ? "cancelled" : run.status;
+          return (
+            <article className="history-row" key={run.id}>
+              <span className={`history-icon history-${displayStatus}`}>
+                {displayStatus === "succeeded" ? (
+                  <CheckCircle2 size={17} />
+                ) : run.status === "failed" ? (
+                  <AlertCircle size={17} />
+                ) : (
+                  <LoaderCircle className="spin" size={17} />
+                )}
+              </span>
+              <div>
+                <strong>
+                  {run.provider} · {run.model}
+                </strong>
+                <span>{run.disclosure}</span>
+                <small>
+                  {run.promptVersion} · Input {run.inputHash.slice(0, 10)}…
+                </small>
+                {run.inputSnapshot && (
+                  <details className="history-snapshot">
+                    <summary>View exact analysis input</summary>
+                    <h4>{run.inputSnapshot.ticket.title || "Ticket"}</h4>
+                    <p>{run.inputSnapshot.ticket.description || "No description supplied."}</p>
+                    <p>{run.inputSnapshot.ticket.acceptanceCriteria || "No acceptance criteria supplied."}</p>
+                    <p>{run.inputSnapshot.ticket.qaContext || "No additional QA context supplied."}</p>
+                    {run.inputSnapshot.requirements.length > 0 && (
+                      <ol>
+                        {run.inputSnapshot.requirements.map((requirement) => (
+                          <li key={requirement.id}>{requirement.text}</li>
+                        ))}
+                      </ol>
+                    )}
+                  </details>
+                )}
+              </div>
+              <div className="history-time">
+                <span className={`status status-${displayStatus}`}>{label(displayStatus)}</span>
+                <time>{formatRelative(run.createdAt)}</time>
+              </div>
+            </article>
+          );
+        })}
         {!runs.length && (
           <div className="inline-empty">
             <Clock3 size={20} /> No analysis runs. Manual use remains fully available.

@@ -24,10 +24,15 @@ export const api = {
   list: () => request<TestpaqSummary[]>("/api/testpaqs"),
   get: (id: string) => request<Testpaq>(`/api/testpaqs/${id}`),
   create: (title: string) => request<Testpaq>("/api/testpaqs", { method: "POST", body: JSON.stringify({ title }) }),
-  save: (item: Testpaq) => request<Testpaq>(`/api/testpaqs/${item.id}`, { method: "PUT", body: JSON.stringify(item) }),
+  save: (item: Testpaq, keepalive = false) =>
+    request<Testpaq>(`/api/testpaqs/${item.id}`, { method: "PUT", body: JSON.stringify(item), keepalive }),
   remove: (id: string) => request<void>(`/api/testpaqs/${id}`, { method: "DELETE" }),
-  analyse: (input: AnalysisInput) =>
-    request<{ result: AnalysisResult; run: AnalysisRun }>("/api/analyse", { method: "POST", body: JSON.stringify(input) }),
+  analyse: (input: AnalysisInput, signal?: AbortSignal) =>
+    request<{ result: AnalysisResult; run: AnalysisRun }>("/api/analyse", {
+      method: "POST",
+      body: JSON.stringify(input),
+      signal,
+    }),
   history: (id: string) => request<AnalysisRun[]>(`/api/testpaqs/${id}/history`),
   fixture: (kind: "sample" | "stress") => request<Testpaq>(`/api/dev/fixtures/${kind}`, { method: "POST" }),
 };

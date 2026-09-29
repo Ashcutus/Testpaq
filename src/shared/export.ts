@@ -4,6 +4,7 @@ const label = (value: string) => value.replaceAll("_", " ").replace(/\b\w/g, (le
 const safe = (value: string) => value.replaceAll("\r", "").trim();
 
 export function renderMarkdown(testpaq: Testpaq, includeRejected = false): string {
+  const requirementNumbers = activeRequirementNumbers(testpaq);
   const accepted = testpaq.scenarios.filter((scenario) => scenario.review === "accepted");
   const rejected = testpaq.scenarios.filter((scenario) => scenario.review === "rejected");
   const covered = new Set(accepted.flatMap((scenario) => scenario.requirementIds));
@@ -25,15 +26,15 @@ export function renderMarkdown(testpaq: Testpaq, includeRejected = false): strin
     "",
     ...testpaq.requirements
       .filter((requirement) => requirement.active)
-      .flatMap((requirement, index) => [`${index + 1}. ${safe(requirement.text)} _(${label(requirement.source)})_`]),
+      .flatMap((requirement) => [`${requirementNumbers.get(requirement.id)}. ${safe(requirement.text)} _(${label(requirement.source)})_`]),
     "",
     "## Accepted scenarios",
     "",
     ...(accepted.length
       ? accepted.flatMap((scenario, index) => {
-          const requirementNumbers = scenario.requirementIds
-            .map((id) => testpaq.requirements.findIndex((requirement) => requirement.id === id) + 1)
-            .filter(Boolean);
+          const linkedRequirementNumbers = scenario.requirementIds
+            .map((id) => requirementNumbers.get(id))
+            .filter((value): value is number => value !== undefined);
           const destinations = Object.entries(scenario.destinations)
             .filter(([, active]) => active)
             .map(([name]) => (name === "qase" ? "Qase candidate" : name === "automation" ? "Automation candidate" : "Manual"));
@@ -42,7 +43,7 @@ export function renderMarkdown(testpaq: Testpaq, includeRejected = false): strin
             "",
             `- **Origin:** ${label(scenario.origin)}`,
             `- **Category:** ${label(scenario.category)}`,
-            `- **Requirements:** ${requirementNumbers.length ? requirementNumbers.join(", ") : "None (additional coverage)"}`,
+            `- **Requirements:** ${linkedRequirementNumbers.length ? linkedRequirementNumbers.join(", ") : "None (additional coverage)"}`,
             `- **Intended coverage:** ${destinations.length ? destinations.join(", ") : "Unclassified"}`,
             "",
             safe(scenario.expectedOutcome),
@@ -70,4 +71,8 @@ export function renderMarkdown(testpaq: Testpaq, includeRejected = false): strin
     .filter((line, index, all) => !(line === "" && all[index - 1] === ""))
     .join("\n")
     .trim()}\n`;
+}
+
+export function activeRequirementNumbers(testpaq: Testpaq): Map<string, number> {
+  return new Map(testpaq.requirements.filter((requirement) => requirement.active).map((requirement, index) => [requirement.id, index + 1]));
 }

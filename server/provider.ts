@@ -4,7 +4,7 @@ import { AnalysisResultSchema, type AnalysisInput, type AnalysisResult } from ".
 export interface AnalysisProvider {
   readonly name: string;
   readonly model: string;
-  analyse(input: AnalysisInput): Promise<AnalysisResult>;
+  analyse(input: AnalysisInput, signal?: AbortSignal): Promise<AnalysisResult>;
 }
 
 export class OpenAIAnalysisProvider implements AnalysisProvider {
@@ -17,23 +17,26 @@ export class OpenAIAnalysisProvider implements AnalysisProvider {
     this.model = model;
   }
 
-  async analyse(input: AnalysisInput): Promise<AnalysisResult> {
-    const response = await this.client.responses.create({
-      model: this.model,
-      instructions: SYSTEM_PROMPT,
-      input: JSON.stringify({
-        ticket: input.ticket,
-        existingRequirements: input.requirements.map(({ id, text, source }) => ({ clientId: id, text, source })),
-      }),
-      text: {
-        format: {
-          type: "json_schema",
-          name: "testpaq_analysis",
-          strict: true,
-          schema: ANALYSIS_JSON_SCHEMA,
+  async analyse(input: AnalysisInput, signal?: AbortSignal): Promise<AnalysisResult> {
+    const response = await this.client.responses.create(
+      {
+        model: this.model,
+        instructions: SYSTEM_PROMPT,
+        input: JSON.stringify({
+          ticket: input.ticket,
+          existingRequirements: input.requirements.map(({ id, text, source }) => ({ clientId: id, text, source })),
+        }),
+        text: {
+          format: {
+            type: "json_schema",
+            name: "testpaq_analysis",
+            strict: true,
+            schema: ANALYSIS_JSON_SCHEMA,
+          },
         },
       },
-    });
+      { signal },
+    );
     if (!response.output_text) throw new Error("The provider returned no structured output.");
     return AnalysisResultSchema.parse(JSON.parse(response.output_text));
   }
