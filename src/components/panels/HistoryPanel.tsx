@@ -5,12 +5,24 @@ import { formatRelative, label } from "../../lib/utils";
 import type { AnalysisRun } from "../../shared/domain";
 
 export function HistoryPanel({ testpaqId, version }: { testpaqId: string; version: number }) {
+  const [error, setError] = useState("");
   const [runs, setRuns] = useState<AnalysisRun[]>([]);
   useEffect(() => {
+    let active = true;
     api
       .history(testpaqId)
-      .then(setRuns)
-      .catch(() => undefined);
+      .then((runs) => {
+        if (active) {
+          setRuns(runs);
+          setError("");
+        }
+      })
+      .catch((reason: Error) => {
+        if (active) setError(reason.message);
+      });
+    return () => {
+      active = false;
+    };
   }, [testpaqId, version]);
   return (
     <div className="panel-stack">
@@ -21,6 +33,11 @@ export function HistoryPanel({ testpaqId, version }: { testpaqId: string; versio
           <p>What was sent, which model handled it, and whether validation succeeded.</p>
         </div>
       </div>
+      {error && (
+        <div className="error-banner" role="alert">
+          {error}
+        </div>
+      )}
       <div className="history-list">
         {runs.map((run) => {
           const displayStatus = run.errorCode === "cancelled" ? "cancelled" : run.status;
@@ -43,6 +60,7 @@ export function HistoryPanel({ testpaqId, version }: { testpaqId: string; versio
                 <small>
                   {run.promptVersion} · Input {run.inputHash.slice(0, 10)}…
                 </small>
+                {run.errorCode && <small>Error: {label(run.errorCode)}</small>}
                 {run.inputSnapshot && (
                   <details className="history-snapshot">
                     <summary>View exact analysis input</summary>
@@ -56,6 +74,30 @@ export function HistoryPanel({ testpaqId, version }: { testpaqId: string; versio
                           <li key={requirement.id}>{requirement.text}</li>
                         ))}
                       </ol>
+                    )}
+                    {(run.inputSnapshot.questions?.length ?? 0) > 0 && (
+                      <>
+                        <h4>Questions and answers</h4>
+                        <ul>
+                          {run.inputSnapshot.questions!.map((question) => (
+                            <li key={question.id}>
+                              {question.status}: {question.text} — {question.resolution || "No answer"}
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                    {(run.inputSnapshot.scenarios?.length ?? 0) > 0 && (
+                      <>
+                        <h4>Existing scenarios</h4>
+                        <ul>
+                          {run.inputSnapshot.scenarios!.map((scenario) => (
+                            <li key={scenario.id}>
+                              {scenario.review}: {scenario.title} — {scenario.expectedOutcome}
+                            </li>
+                          ))}
+                        </ul>
+                      </>
                     )}
                   </details>
                 )}

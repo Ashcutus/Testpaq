@@ -3,9 +3,19 @@ import { useState } from "react";
 import { label } from "../../lib/utils";
 import type { Question, Testpaq } from "../../shared/domain";
 import { activeRequirementNumbers } from "../../shared/export";
+import { Dialog } from "../ui/Dialog";
 import { Button } from "../ui/Button";
 
-export function QuestionsPanel({ item, update }: { item: Testpaq; update: (recipe: (item: Testpaq) => Testpaq) => void }) {
+export function QuestionsPanel({
+  item,
+  update,
+  onRefresh,
+}: {
+  item: Testpaq;
+  update: (recipe: (item: Testpaq) => Testpaq) => void;
+  onRefresh?: () => void;
+}) {
+  const [refreshOpen, setRefreshOpen] = useState(false);
   const requirementNumbers = activeRequirementNumbers(item);
   const [filter, setFilter] = useState<Question["status"] | "all">("open");
   const visible = item.questions.filter((question) => filter === "all" || question.status === filter);
@@ -20,13 +30,19 @@ export function QuestionsPanel({ item, update }: { item: Testpaq; update: (recip
       });
       return draft;
     });
-  const setStatus = (id: string, status: Question["status"]) =>
+  const setStatus = (id: string, status: Question["status"]) => {
+    if (status === "resolved" && !item.questions.find((value) => value.id === id)?.resolution?.trim()) return;
+    const next = item.questions.map((value) => (value.id === id ? { ...value, status } : value));
+    const answered = next.filter((value) => value.status !== "dismissed");
+    if (status === "resolved" && answered.length && answered.every((value) => value.status === "resolved" && value.resolution?.trim()))
+      setRefreshOpen(true);
     update((draft) => {
       const question = draft.questions.find((value) => value.id === id)!;
       question.status = status;
       question.resolvedAt = status === "resolved" ? new Date().toISOString() : undefined;
       return draft;
     });
+  };
   return (
     <div className="panel-stack">
       <div className="content-heading">
@@ -68,6 +84,8 @@ export function QuestionsPanel({ item, update }: { item: Testpaq; update: (recip
               </div>
               <textarea
                 rows={2}
+                maxLength={3000}
+                aria-label="Question"
                 value={question.text}
                 onChange={(event) =>
                   update((draft) => {
@@ -76,27 +94,34 @@ export function QuestionsPanel({ item, update }: { item: Testpaq; update: (recip
                   })
                 }
               />
-              {question.status === "resolved" && (
-                <input
-                  className="resolution-input"
-                  aria-label="Resolution"
+              <label className="field">
+                <span>Answer</span>
+                <textarea
+                  rows={3}
+                  maxLength={3000}
+                  aria-label={`Answer to: ${question.text}`}
                   value={question.resolution || ""}
-                  placeholder="Resolution…"
+                  placeholder="Record the answer or clarification…"
                   onChange={(event) =>
                     update((draft) => {
-                      draft.questions.find((value) => value.id === question.id)!.resolution = event.target.value;
+                      const value = draft.questions.find((value) => value.id === question.id)!;
+                      value.resolution = event.target.value;
+                      if (value.status === "resolved" && !event.target.value.trim()) {
+                        value.status = "open";
+                        delete value.resolvedAt;
+                      }
                       return draft;
                     })
                   }
                 />
-              )}
+              </label>
             </div>
             <div className="question-actions">
               {question.status === "open" ? (
                 <>
-                  <button onClick={() => setStatus(question.id, "resolved")}>
+                  <button disabled={!question.resolution?.trim()} onClick={() => setStatus(question.id, "resolved")}>
                     <CheckCircle2 size={15} />
-                    Resolve
+                    Save answer
                   </button>
                   <button onClick={() => setStatus(question.id, "dismissed")}>
                     <CircleSlash2 size={15} />
@@ -114,6 +139,30 @@ export function QuestionsPanel({ item, update }: { item: Testpaq; update: (recip
         ))}
         {!visible.length && <div className="inline-empty">No {filter === "all" ? "" : filter} questions.</div>}
       </div>
+      <Dialog
+        open={refreshOpen}
+        onOpenChange={setRefreshOpen}
+        title="Questions answered"
+        description="All remaining questions have answers. Refresh this Testpaq to include the clarified scope?"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setRefreshOpen(false)}>
+              Later
+            </Button>
+            <Button
+              onClick={() => {
+                setRefreshOpen(false);
+                onRefresh?.();
+              }}
+              disabled={!onRefresh}
+            >
+              Refresh Testpaq
+            </Button>
+          </>
+        }
+      >
+        <p>Your answers are saved locally. You can review the content sent to OpenAI before confirming the refresh.</p>
+      </Dialog>
     </div>
   );
 }

@@ -38,7 +38,7 @@ export function TicketPanel({
           <p>Preserve what Product said before adding suggested coverage.</p>
         </div>
         <Button icon={<ListChecks size={16} />} onClick={onAnalyse}>
-          Analyse ticket
+          {item.scenarios.length || item.lastAnalysedSignature ? "Refresh analysis" : "Analyse ticket"}
         </Button>
       </div>
       <section className="editor-section ticket-grid">
