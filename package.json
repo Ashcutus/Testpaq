@@ -1,6 +1,6 @@
 {
   "name": "testpaq",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "bin": {
@@ -17,7 +17,9 @@
     "test:watch": "vitest",
     "lint": "eslint . --max-warnings 0",
     "format:check": "prettier --check .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "prebuild": "node scripts/check-env.mjs",
+    "run": "node scripts/run.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.4",
