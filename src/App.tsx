@@ -1,15 +1,18 @@
-import { ArrowLeft, Plus, ShieldCheck } from "lucide-react";
+import { ArrowLeft, KeyRound, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import { TestpaqList } from "./components/TestpaqList";
 import { TestpaqWorkbench } from "./components/TestpaqWorkbench";
 import { ThemeControl } from "./components/ThemeControl";
 import { Button } from "./components/ui/Button";
+import { ProviderSettings } from "./components/ProviderSettings";
 import { api } from "./lib/api";
 
 export type AppConfig = Awaited<ReturnType<typeof api.config>>;
 
 export function App() {
   const [route, setRoute] = useState(() => location.hash.slice(1) || "/");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [configError, setConfigError] = useState("");
   const [config, setConfig] = useState<AppConfig>();
   useEffect(() => {
     const handler = () => setRoute(location.hash.slice(1) || "/");
@@ -17,7 +20,7 @@ export function App() {
     api
       .config()
       .then(setConfig)
-      .catch(() => undefined);
+      .catch((reason: Error) => setConfigError(reason.message));
     return () => removeEventListener("hashchange", handler);
   }, []);
   const id = route.startsWith("/testpaqs/") ? route.split("/")[2] : undefined;
@@ -27,18 +30,32 @@ export function App() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div className="brand" onClick={() => go("/")} role="button" tabIndex={0}>
+        <button className="brand" onClick={() => go("/")}>
           <span>TESTPAQ</span>
-          <span className="version">0.1</span>
-        </div>
+          <span className="version">0.2</span>
+        </button>
         <div className="topbar-actions">
           <span className="local-indicator">
             <ShieldCheck size={14} /> Local-only workspace
           </span>
+          <Button variant="ghost" size="sm" icon={<KeyRound size={14} />} onClick={() => setSettingsOpen(true)}>
+            {config?.providerStatus.status === "ready"
+              ? "OpenAI verified"
+              : config?.providerStatus.status === "error"
+                ? "OpenAI needs attention"
+                : config?.configured
+                  ? "Check OpenAI"
+                  : "Connect OpenAI"}
+          </Button>
           <ThemeControl />
         </div>
       </header>
       <main>
+        {configError && (
+          <div className="error-banner" role="alert">
+            Could not load API configuration: {configError}
+          </div>
+        )}
         {id ? (
           <>
             <div className="crumbbar">
@@ -46,17 +63,13 @@ export function App() {
                 All Testpaqs
               </Button>
             </div>
-            <TestpaqWorkbench id={id} config={config} />
+            <TestpaqWorkbench key={id} id={id} config={config} onConfig={setConfig} />
           </>
         ) : (
           <TestpaqList config={config} onOpen={(itemId) => go(`/testpaqs/${itemId}`)} />
         )}
       </main>
-      {!id && (
-        <button className="mobile-create" aria-label="New Testpaq">
-          <Plus />
-        </button>
-      )}
+      <ProviderSettings open={settingsOpen} onOpenChange={setSettingsOpen} config={config} onConfig={setConfig} />
     </div>
   );
 }
