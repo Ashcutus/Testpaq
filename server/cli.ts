@@ -10,16 +10,25 @@ import { createApp } from "./app.js";
 import { OpenAIAnalysisProvider } from "./provider.js";
 import { TestpaqStore } from "./store.js";
 
+import { loadEnvironment, warnMissingKey } from "./env.js";
+
+loadEnvironment();
+warnMissingKey();
+
 const args = process.argv.slice(2);
 const noOpen = args.includes("--no-open");
 const portIndex = args.indexOf("--port");
 const requestedPort = portIndex >= 0 ? Number(args[portIndex + 1]) : 0;
+if (!Number.isInteger(requestedPort) || requestedPort < 0 || requestedPort > 65535) {
+  console.error("--port must be an integer between 0 and 65535.");
+  process.exit(1);
+}
 const isDev = Boolean(process.env.TESTPAQ_DEV_ORIGIN);
 const sessionToken = process.env.TESTPAQ_SESSION_TOKEN || randomBytes(32).toString("base64url");
 const dataDir = process.env.TESTPAQ_DATA_DIR || defaultDataDirectory();
 const store = new TestpaqStore(join(dataDir, "testpaq.db"));
-const provider = process.env.OPENAI_API_KEY
-  ? new OpenAIAnalysisProvider(process.env.OPENAI_API_KEY, process.env.TESTPAQ_OPENAI_MODEL)
+const provider = process.env.OPENAI_API_KEY?.trim()
+  ? new OpenAIAnalysisProvider(process.env.OPENAI_API_KEY!.trim(), process.env.TESTPAQ_OPENAI_MODEL)
   : undefined;
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
 const distDir = resolve(currentDirectory, "../../dist");
@@ -49,7 +58,7 @@ server.on("listening", async () => {
   // The random token is embedded in the served page, never printed or placed in the URL.
   console.log(`Testpaq is ready at ${url}`);
   console.log(`Local data: ${dataDir}`);
-  if (!noOpen) await open(url);
+  if (!noOpen) await open(url).catch(() => console.warn("Could not open the browser. Open the URL above manually."));
 });
 
 const shutdown = () => {
