@@ -75,6 +75,8 @@ export const TestpaqSchema = z
   .object({
     id: z.uuid(),
     title: z.string().trim().min(1).max(300),
+    groupId: z.uuid().optional(),
+    lastAnalysedSignature: z.string().optional(),
     status: z.enum(["draft", "in_review", "exported"]),
     ticket: TicketSchema,
     requirements: z.array(RequirementSchema).max(500),
@@ -107,54 +109,62 @@ export const TestpaqSchema = z
 export const AnalysisInputSchema = z.object({
   testpaqId: z.uuid(),
   ticket: TicketSchema,
-  requirements: z.array(RequirementSchema).max(200),
+  requirements: z.array(RequirementSchema).max(500),
+  questions: z.array(QuestionSchema).max(500).optional(),
+  scenarios: z.array(ScenarioSchema).max(1000).optional(),
 });
 
 export const AnalysisResultSchema = z
   .object({
-    requirements: z.array(
-      z.object({
-        clientId: z.string().min(1).max(100),
-        text: z.string().trim().min(1).max(4000),
-        source: RequirementSourceSchema,
-      }),
-    ),
-    scenarios: z.array(
-      z.object({
-        clientId: z.string().min(1).max(100),
-        title: z.string().trim().min(1).max(300),
-        expectedOutcome: z.string().trim().min(1).max(5000),
-        origin: z.enum(["explicit", "inferred"]),
-        category: CategorySchema,
-        requirementClientIds: z.array(z.string().min(1)).max(50),
-        rationale: z
-          .string()
-          .trim()
-          .max(3000)
-          .optional()
-          .nullable()
-          .transform((value) => value ?? undefined),
-        risks: z.array(z.string().trim().min(1).max(1000)).max(20),
-      }),
-    ),
-    questions: z.array(
-      z.object({
-        text: z.string().trim().min(1).max(3000),
-        origin: z.enum(["explicit", "inferred"]),
-        requirementClientId: z
-          .string()
-          .min(1)
-          .optional()
-          .nullable()
-          .transform((value) => value ?? undefined),
-        scenarioClientId: z
-          .string()
-          .min(1)
-          .optional()
-          .nullable()
-          .transform((value) => value ?? undefined),
-      }),
-    ),
+    requirements: z
+      .array(
+        z.object({
+          clientId: z.string().min(1).max(100),
+          text: z.string().trim().min(1).max(4000),
+          source: RequirementSourceSchema,
+        }),
+      )
+      .max(500),
+    scenarios: z
+      .array(
+        z.object({
+          clientId: z.string().min(1).max(100),
+          title: z.string().trim().min(1).max(300),
+          expectedOutcome: z.string().trim().min(1).max(5000),
+          origin: z.enum(["explicit", "inferred"]),
+          category: CategorySchema,
+          requirementClientIds: z.array(z.string().min(1)).max(50),
+          rationale: z
+            .string()
+            .trim()
+            .max(3000)
+            .optional()
+            .nullable()
+            .transform((value) => value ?? undefined),
+          risks: z.array(z.string().trim().min(1).max(1000)).max(20),
+        }),
+      )
+      .max(1000),
+    questions: z
+      .array(
+        z.object({
+          text: z.string().trim().min(1).max(3000),
+          origin: z.enum(["explicit", "inferred"]),
+          requirementClientId: z
+            .string()
+            .min(1)
+            .optional()
+            .nullable()
+            .transform((value) => value ?? undefined),
+          scenarioClientId: z
+            .string()
+            .min(1)
+            .optional()
+            .nullable()
+            .transform((value) => value ?? undefined),
+        }),
+      )
+      .max(500),
   })
   .superRefine((result, context) => {
     const requirementIds = new Set(result.requirements.map((item) => item.clientId));
@@ -187,7 +197,7 @@ export type Question = z.infer<typeof QuestionSchema>;
 export type AnalysisInput = z.infer<typeof AnalysisInputSchema>;
 export type AnalysisResult = z.infer<typeof AnalysisResultSchema>;
 
-export type TestpaqSummary = Pick<Testpaq, "id" | "title" | "status" | "createdAt" | "updatedAt"> & {
+export type TestpaqSummary = Pick<Testpaq, "id" | "title" | "groupId" | "status" | "createdAt" | "updatedAt"> & {
   reference: string;
   scenarioCount: number;
   openQuestionCount: number;
@@ -207,4 +217,13 @@ export type AnalysisRun = {
   errorCode?: string;
   createdAt: string;
   completedAt?: string;
+};
+
+export type ProjectGroup = { id: string; name: string };
+export type ProviderStatus = {
+  status: "unconfigured" | "unchecked" | "ready" | "error";
+  message: string;
+  code?: string;
+  billingUrl?: string;
+  checkedAt?: string;
 };
