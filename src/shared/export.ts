@@ -10,6 +10,7 @@ export function renderMarkdown(testpaq: Testpaq, includeRejected = false): strin
   const covered = new Set(accepted.flatMap((scenario) => scenario.requirementIds));
   const uncovered = testpaq.requirements.filter((requirement) => requirement.active && !covered.has(requirement.id));
   const openQuestions = testpaq.questions.filter((question) => question.status === "open");
+  const answeredQuestions = testpaq.questions.filter((question) => question.status === "resolved" && question.resolution?.trim());
   const risks = [...new Set(accepted.flatMap((scenario) => scenario.risks))];
   const lines = [
     `# QA coverage: ${safe(testpaq.title)}`,
@@ -59,6 +60,12 @@ export function renderMarkdown(testpaq: Testpaq, includeRejected = false): strin
     "## Open questions",
     "",
     ...(openQuestions.length ? openQuestions.map((question) => `- ${safe(question.text)} _(${label(question.origin)})_`) : ["None."]),
+    "",
+    "## Answered questions",
+    "",
+    ...(answeredQuestions.length
+      ? answeredQuestions.flatMap((question) => [`- **Question:** ${safe(question.text)}`, `  **Answer:** ${safe(question.resolution!)}`])
+      : ["None."]),
     "",
     "## Risks",
     "",

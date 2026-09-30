@@ -1460,7 +1460,7 @@ kbd {
     align-items: center;
   }
   .page-heading > .button {
-    display: none;
+    display: inline-flex;
   }
   .mobile-create {
     position: fixed;
@@ -1552,4 +1552,51 @@ kbd {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* v0.2 project organisation and connection settings */
+.brand {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+.group-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.group-toolbar .field {
+  min-width: 240px;
+  flex: 1;
+  max-width: 480px;
+}
+.field select {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.group-assignment {
+  max-width: 360px;
+  margin: 0 24px 18px;
+}
+fieldset.workbench-body {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.disclosure-preview dd {
+  white-space: pre-wrap;
 }

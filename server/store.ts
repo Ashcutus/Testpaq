@@ -22,6 +22,9 @@ export class TestpaqStore {
     this.database.pragma("foreign_keys = ON");
     this.database.pragma("journal_mode = WAL");
     this.migrate();
+    this.database
+      .prepare("UPDATE analysis_runs SET status='failed', error_code='interrupted', completed_at=? WHERE status='running'")
+      .run(new Date().toISOString());
   }
 
   private migrate() {
@@ -62,6 +65,40 @@ export class TestpaqStore {
         PRAGMA user_version = 2;
       `);
     }
+    if (version < 3) {
+      this.database.exec(`
+        CREATE TABLE project_groups (id TEXT PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE UNIQUE);
+        PRAGMA user_version = 3;
+      `);
+    }
+  }
+
+  listGroups(): Array<{ id: string; name: string }> {
+    return this.database.prepare("SELECT id, name FROM project_groups ORDER BY name COLLATE NOCASE").all() as Array<{
+      id: string;
+      name: string;
+    }>;
+  }
+
+  saveGroup(name: string, id: string = randomUUID()) {
+    this.database
+      .prepare("INSERT INTO project_groups(id, name) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name=excluded.name")
+      .run(id, name);
+    return { id, name };
+  }
+
+  removeGroup(id: string) {
+    return this.database.transaction(() => {
+      if (!this.listGroups().some((group) => group.id === id)) return false;
+      for (const summary of this.list().filter((item) => item.groupId === id)) {
+        const item = this.get(summary.id)!;
+        delete item.groupId;
+        item.updatedAt = new Date(Math.max(Date.now(), Date.parse(item.updatedAt) + 1)).toISOString();
+        this.save(item);
+      }
+      this.database.prepare("DELETE FROM project_groups WHERE id=?").run(id);
+      return true;
+    })();
   }
 
   list(): TestpaqSummary[] {
@@ -71,6 +108,7 @@ export class TestpaqStore {
       return {
         id: item.id,
         title: item.title,
+        groupId: item.groupId,
         reference: item.ticket.reference,
         status: item.status,
         scenarioCount: item.scenarios.length,
@@ -88,6 +126,7 @@ export class TestpaqStore {
 
   save(input: Testpaq): Testpaq {
     const item = TestpaqSchema.parse(input);
+    if (item.groupId && !this.listGroups().some((group) => group.id === item.groupId)) throw new Error("Unknown project group.");
     this.database
       .prepare(
         `INSERT INTO testpaqs (id, title, reference, status, payload, created_at, updated_at)

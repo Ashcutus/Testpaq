@@ -3,32 +3,44 @@ import { useEffect, useState } from "react";
 import type { AppConfig } from "../App";
 import { api } from "../lib/api";
 import { formatRelative, label } from "../lib/utils";
-import type { TestpaqSummary } from "../shared/domain";
+import type { TestpaqSummary, ProjectGroup } from "../shared/domain";
 import { Button } from "./ui/Button";
 import { Dialog } from "./ui/Dialog";
 
 export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (id: string) => void }) {
   const [items, setItems] = useState<TestpaqSummary[]>([]);
+  const [groups, setGroups] = useState<ProjectGroup[]>([]);
+  const [groupFilter, setGroupFilter] = useState("all");
+  const [groupId, setGroupId] = useState("");
+  const [groupOpen, setGroupOpen] = useState(false);
+  const [groupName, setGroupName] = useState("");
+  const [editingGroup, setEditingGroup] = useState<string>();
+  const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
   const [newOpen, setNewOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [error, setError] = useState("");
   const load = () =>
-    api
-      .list()
-      .then(setItems)
+    Promise.all([api.list(), api.groups()])
+      .then(([items, groups]) => {
+        setItems(items);
+        setGroups(groups);
+      })
       .catch((reason: Error) => setError(reason.message));
   useEffect(() => {
     void load();
   }, []);
   const create = async () => {
-    if (!title.trim()) return;
+    if (!title.trim() || busy) return;
+    setBusy(true);
     try {
-      const item = await api.create(title);
+      const item = await api.create(title, groupId || undefined);
       setNewOpen(false);
       onOpen(item.id);
     } catch (reason) {
       setError((reason as Error).message);
+    } finally {
+      setBusy(false);
     }
   };
   const loadFixture = async (kind: "sample" | "stress") => {
@@ -39,7 +51,44 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
       setError((reason as Error).message);
     }
   };
-  const filtered = items.filter((item) => `${item.title} ${item.reference}`.toLowerCase().includes(query.toLowerCase()));
+  const filtered = items.filter(
+    (item) =>
+      (groupFilter === "all" || (groupFilter === "ungrouped" ? !item.groupId : item.groupId === groupFilter)) &&
+      `${item.title} ${item.reference}`.toLowerCase().includes(query.toLowerCase()),
+  );
+  const saveGroup = async () => {
+    if (!groupName.trim() || busy) return;
+    setBusy(true);
+    try {
+      if (editingGroup) await api.renameGroup(editingGroup, groupName);
+      else await api.createGroup(groupName);
+      setGroupOpen(false);
+      await load();
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const deleteGroup = async () => {
+    if (!editingGroup || busy) return;
+    setBusy(true);
+    try {
+      await api.removeGroup(editingGroup);
+      setGroupFilter("all");
+      setGroupId("");
+      setGroupOpen(false);
+      await load();
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const openCreate = () => {
+    setGroupId(groups.some((group) => group.id === groupFilter) ? groupFilter : "");
+    setNewOpen(true);
+  };
   return (
     <div className="page page-list">
       <section className="page-heading">
@@ -48,7 +97,7 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
           <h1>Testpaqs</h1>
           <p>Turn product intent into reviewed, traceable coverage.</p>
         </div>
-        <Button icon={<Plus size={16} />} onClick={() => setNewOpen(true)}>
+        <Button icon={<Plus size={16} />} onClick={openCreate}>
           New Testpaq
         </Button>
       </section>
@@ -58,6 +107,42 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
           {error}
         </div>
       )}
+      <div className="group-toolbar">
+        <label className="field">
+          <span>Project group</span>
+          <select value={groupFilter} onChange={(event) => setGroupFilter(event.target.value)}>
+            <option value="all">All groups ({items.length})</option>
+            <option value="ungrouped">Ungrouped ({items.filter((item) => !item.groupId).length})</option>
+            {groups.map((group) => (
+              <option key={group.id} value={group.id}>
+                {group.name} ({items.filter((item) => item.groupId === group.id).length})
+              </option>
+            ))}
+          </select>
+        </label>
+        <Button
+          variant="secondary"
+          onClick={() => {
+            setEditingGroup(undefined);
+            setGroupName("");
+            setGroupOpen(true);
+          }}
+        >
+          New group
+        </Button>
+        {groups.some((group) => group.id === groupFilter) && (
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setEditingGroup(groupFilter);
+              setGroupName(groups.find((group) => group.id === groupFilter)!.name);
+              setGroupOpen(true);
+            }}
+          >
+            Manage group
+          </Button>
+        )}
+      </div>
       <div className="list-toolbar">
         <label className="search">
           <Search size={16} />
@@ -77,7 +162,8 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
             <span className="work-main">
               <strong>{item.title}</strong>
               <span>
-                {item.reference || "No ticket reference"} · Updated {formatRelative(item.updatedAt)}
+                {groups.find((group) => group.id === item.groupId)?.name || "Ungrouped"} · {item.reference || "No ticket reference"} ·
+                Updated {formatRelative(item.updatedAt)}
               </span>
             </span>
             <span className={`status status-${item.status}`}>{label(item.status)}</span>
@@ -98,7 +184,7 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
                 ? "Try a different title or ticket reference."
                 : "Paste a ticket, make its requirements explicit, then review suggested coverage."}
             </p>
-            <Button icon={<Plus size={16} />} onClick={() => setNewOpen(true)}>
+            <Button icon={<Plus size={16} />} onClick={openCreate}>
               Create your first Testpaq
             </Button>
             {config?.fixturesEnabled && (
@@ -116,7 +202,10 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
       </section>
       <Dialog
         open={newOpen}
-        onOpenChange={setNewOpen}
+        onOpenChange={(value) => {
+          if (!busy) setNewOpen(value);
+        }}
+        closeDisabled={busy}
         title="Create a Testpaq"
         description="One focused packet of QA work for a product change."
         footer={
@@ -124,7 +213,7 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
             <Button variant="ghost" onClick={() => setNewOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={create} disabled={!title.trim()}>
+            <Button onClick={create} disabled={!title.trim() || busy}>
               Create Testpaq
             </Button>
           </>
@@ -134,6 +223,7 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
           <span>Working title</span>
           <input
             autoFocus
+            maxLength={300}
             value={title}
             onChange={(event) => setTitle(event.target.value)}
             onKeyDown={(event) => {
@@ -142,6 +232,48 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
             placeholder="e.g. Campaign amount visibility"
           />
         </label>
+        <label className="field">
+          <span>Project group</span>
+          <select value={groupId} onChange={(event) => setGroupId(event.target.value)}>
+            <option value="">Ungrouped</option>
+            {groups.map((group) => (
+              <option key={group.id} value={group.id}>
+                {group.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </Dialog>
+      <Dialog
+        open={groupOpen}
+        onOpenChange={(value) => {
+          if (!busy) setGroupOpen(value);
+        }}
+        closeDisabled={busy}
+        title={editingGroup ? "Manage project group" : "Create project group"}
+        description="Group Testpaqs by project. Removing a group keeps its Testpaqs under Ungrouped."
+        footer={
+          <>
+            {editingGroup && (
+              <Button variant="ghost" onClick={deleteGroup} disabled={busy}>
+                Remove group
+              </Button>
+            )}
+            <Button onClick={saveGroup} disabled={!groupName.trim() || busy}>
+              Save group
+            </Button>
+          </>
+        }
+      >
+        <label className="field">
+          <span>Group name</span>
+          <input autoFocus maxLength={100} value={groupName} onChange={(event) => setGroupName(event.target.value)} />
+        </label>
+        {error && (
+          <div className="error-banner" role="alert">
+            {error}
+          </div>
+        )}
       </Dialog>
     </div>
   );
