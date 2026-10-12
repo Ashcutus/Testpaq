@@ -1,3 +1,4 @@
+import { eligibleCases, caseNeedsReview } from "./test-cases.js";
 import type { Testpaq } from "./domain.js";
 
 const label = (value: string) => value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
@@ -5,13 +6,15 @@ const safe = (value: string) => value.replaceAll("\r", "").trim();
 
 export function renderMarkdown(testpaq: Testpaq, includeRejected = false): string {
   const requirementNumbers = activeRequirementNumbers(testpaq);
-  const accepted = testpaq.scenarios.filter((scenario) => scenario.review === "accepted");
+  const accepted = testpaq.scenarios.filter((scenario) => scenario.review === "accepted" && !scenario.archived);
   const rejected = testpaq.scenarios.filter((scenario) => scenario.review === "rejected");
   const covered = new Set(accepted.flatMap((scenario) => scenario.requirementIds));
   const uncovered = testpaq.requirements.filter((requirement) => requirement.active && !covered.has(requirement.id));
   const openQuestions = testpaq.questions.filter((question) => question.status === "open");
   const answeredQuestions = testpaq.questions.filter((question) => question.status === "resolved" && question.resolution?.trim());
   const risks = [...new Set(accepted.flatMap((scenario) => scenario.risks))];
+  const exportCases = eligibleCases(testpaq);
+  const ready = new Set(exportCases.map((value) => value.id));
   const lines = [
     `# QA coverage: ${safe(testpaq.title)}`,
     "",
@@ -38,7 +41,7 @@ export function renderMarkdown(testpaq: Testpaq, includeRejected = false): strin
             .filter((value): value is number => value !== undefined);
           const destinations = Object.entries(scenario.destinations)
             .filter(([, active]) => active)
-            .map(([name]) => (name === "qase" ? "Qase candidate" : name === "automation" ? "Automation candidate" : "Manual"));
+            .map(([name]) => (name === "qase" ? "Qase CSV" : name === "automation" ? "To be automated in Qase" : "Manual"));
           return [
             `### ${index + 1}. ${safe(scenario.title)}`,
             "",
@@ -53,6 +56,30 @@ export function renderMarkdown(testpaq: Testpaq, includeRejected = false): strin
           ];
         })
       : ["No scenarios have been accepted.", ""]),
+    "## Linked test cases",
+    "",
+    ...(exportCases.length
+      ? exportCases.flatMap((value) => [
+          `### ${safe(value.title)}`,
+          "",
+          `- **Case ID:** ${value.id}`,
+          `- **Coverage output:** ${safe(testpaq.scenarios.find((scenario) => scenario.id === value.scenarioId)?.title ?? "Unknown")}`,
+          `- **Review:** ${label(value.review)}${caseNeedsReview(testpaq, value) ? " (scope review needed)" : ""}`,
+          `- **Handoff:** ${ready.has(value.id) ? "Reviewed and current" : "Not ready"}`,
+          `- **Destinations:** ${value.destinations.qase ? "Qase CSV" : ""}${value.destinations.automation ? " · To be automated" : ""}${value.destinations.manual ? " · Manual" : ""}`,
+          `- **Objective:** ${safe(value.objective)}`,
+          `- **Preconditions:** ${safe(value.preconditions) || "None specified"}`,
+          `- **Postconditions:** ${safe(value.postconditions) || "None specified"}`,
+          ...value.unknowns.map((unknown) => `- **Missing detail:** ${safe(unknown)}`),
+          "",
+          ...value.steps.flatMap((step, index) => [
+            `${index + 1}. ${safe(step.action)}`,
+            `   - Data: ${safe(step.data) || "None specified"}`,
+            `   - Expected: ${safe(step.expectedResult)}`,
+          ]),
+          "",
+        ])
+      : ["No current, accepted test cases are ready for handoff. Accepted scenarios describe coverage intent.", ""]),
     "## Uncovered requirements",
     "",
     ...(uncovered.length ? uncovered.map((requirement) => `- ${safe(requirement.text)}`) : ["None."]),
@@ -81,5 +108,10 @@ export function renderMarkdown(testpaq: Testpaq, includeRejected = false): strin
 }
 
 export function activeRequirementNumbers(testpaq: Testpaq): Map<string, number> {
-  return new Map(testpaq.requirements.filter((requirement) => requirement.active).map((requirement, index) => [requirement.id, index + 1]));
+  return new Map(
+    testpaq.requirements
+      .map((requirement, index) => [requirement, index + 1] as const)
+      .filter(([requirement]) => requirement.active)
+      .map(([requirement, number]) => [requirement.id, number]),
+  );
 }

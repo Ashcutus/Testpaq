@@ -35,6 +35,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export type Config = { provider: string; model: string; configured: boolean; fixturesEnabled: boolean; providerStatus: ProviderStatus };
 export const api = {
+  backup: () => request<import("../shared/domain").WorkspaceBackup>("/api/workspace/backup", { method: "POST" }),
+  restore: (backup: unknown) => request<{ restored: boolean }>("/api/workspace/restore", { method: "POST", body: JSON.stringify(backup) }),
+  selectModel: (model: string) => request<Config>("/api/provider/model", { method: "PATCH", body: JSON.stringify({ model }) }),
+  models: () => request<string[]>("/api/provider/models", { method: "POST" }),
   checkProvider: (apiKey?: string, model?: string) =>
     request<Config>("/api/provider/check", { method: "POST", body: JSON.stringify({ apiKey, model }) }),
   groups: () => request<ProjectGroup[]>("/api/groups"),
@@ -42,7 +46,10 @@ export const api = {
   renameGroup: (id: string, name: string) => request<ProjectGroup>(`/api/groups/${id}`, { method: "PUT", body: JSON.stringify({ name }) }),
   removeGroup: (id: string) => request<void>(`/api/groups/${id}`, { method: "DELETE" }),
   config: () => request<Config>("/api/config"),
-  list: () => request<TestpaqSummary[]>("/api/testpaqs"),
+  list: (options: { offset?: number; query?: string; group?: string } = {}) =>
+    request<TestpaqSummary[]>(
+      `/api/testpaqs?${new URLSearchParams({ offset: String(options.offset ?? 0), query: options.query ?? "", group: options.group ?? "all" })}`,
+    ),
   get: (id: string) => request<Testpaq>(`/api/testpaqs/${id}`),
   create: (title: string, groupId?: string) =>
     request<Testpaq>("/api/testpaqs", { method: "POST", body: JSON.stringify({ title, groupId }) }),
@@ -55,6 +62,8 @@ export const api = {
       body: JSON.stringify(input),
       signal,
     }),
-  history: (id: string) => request<AnalysisRun[]>(`/api/testpaqs/${id}/history`),
+  draftCases: (input: { testpaqId: string; scenarioId: string; updatedAt: string; model: string }, signal?: AbortSignal) =>
+    request<{ item: Testpaq; run: AnalysisRun }>("/api/test-cases/draft", { method: "POST", body: JSON.stringify(input), signal }),
+  history: (id: string, offset = 0) => request<AnalysisRun[]>(`/api/testpaqs/${id}/history?offset=${offset}`),
   fixture: (kind: "sample" | "stress") => request<Testpaq>(`/api/dev/fixtures/${kind}`, { method: "POST" }),
 };

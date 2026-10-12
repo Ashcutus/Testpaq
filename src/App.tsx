@@ -4,6 +4,7 @@ import { TestpaqList } from "./components/TestpaqList";
 import { TestpaqWorkbench } from "./components/TestpaqWorkbench";
 import { ThemeControl } from "./components/ThemeControl";
 import { Button } from "./components/ui/Button";
+import { WorkspaceSettings } from "./components/WorkspaceSettings";
 import { ProviderSettings } from "./components/ProviderSettings";
 import { api } from "./lib/api";
 
@@ -11,6 +12,7 @@ export type AppConfig = Awaited<ReturnType<typeof api.config>>;
 
 export function App() {
   const [route, setRoute] = useState(() => location.hash.slice(1) || "/");
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [configError, setConfigError] = useState("");
   const [config, setConfig] = useState<AppConfig>();
@@ -32,7 +34,7 @@ export function App() {
       <header className="topbar">
         <button className="brand" onClick={() => go("/")}>
           <span>TESTPAQ</span>
-          <span className="version">0.2</span>
+          <span className="version">0.3</span>
         </button>
         <div className="topbar-actions">
           <span className="local-indicator">
@@ -46,6 +48,9 @@ export function App() {
                 : config?.configured
                   ? "Check OpenAI"
                   : "Connect OpenAI"}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setWorkspaceOpen(true)}>
+            Backup / restore
           </Button>
           <ThemeControl />
         </div>
@@ -69,6 +74,7 @@ export function App() {
           <TestpaqList config={config} onOpen={(itemId) => go(`/testpaqs/${itemId}`)} />
         )}
       </main>
+      <WorkspaceSettings open={workspaceOpen} onOpenChange={setWorkspaceOpen} />
       <ProviderSettings open={settingsOpen} onOpenChange={setSettingsOpen} config={config} onConfig={setConfig} />
     </div>
   );

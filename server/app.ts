@@ -5,11 +5,21 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { secureHeaders } from "hono/secure-headers";
 import { z } from "zod";
-import { AnalysisInputSchema, AnalysisResultSchema, TestpaqSchema, type AnalysisResult, type Testpaq } from "../src/shared/domain.js";
+import {
+  CaseGenerationInputSchema,
+  CaseGenerationResultSchema,
+  AnalysisInputSchema,
+  AnalysisResultSchema,
+  TestpaqSchema,
+  type AnalysisResult,
+  type Testpaq,
+} from "../src/shared/domain.js";
+import { renderQaseCsv } from "../src/shared/qase.js";
 import { renderMarkdown } from "../src/shared/export.js";
 import { makeFixture } from "./fixture.js";
 import { OpenAIAnalysisProvider, type AnalysisProvider } from "./provider.js";
 import { BILLING_URL, providerError } from "./provider-errors.js";
+import { applyGeneratedCases } from "../src/shared/test-cases.js";
 import { applyAnalysis } from "../src/shared/analysis.js";
 import type { ProviderStatus } from "../src/shared/domain.js";
 import type { TestpaqStore } from "./store.js";
@@ -21,11 +31,14 @@ type AppOptions = {
   allowedOrigin: string;
   distDir?: string;
   fixturesEnabled?: boolean;
+  shutdownSignal?: AbortSignal;
 };
 
 export function createApp(options: AppOptions) {
   const app = new Hono();
   let provider = options.provider;
+  let selectedModel = options.store.getSetting("openai_model") ?? provider?.model ?? process.env.TESTPAQ_OPENAI_MODEL ?? "gpt-5-mini";
+  if (provider?.withModel) provider = provider.withModel(selectedModel);
   let providerStatus: ProviderStatus = {
     status: provider ? "unchecked" : "unconfigured",
     message: provider
@@ -35,7 +48,25 @@ export function createApp(options: AppOptions) {
   };
   let checking = false;
   const activeAnalyses = new Set<string>();
-  app.use("/api/*", bodyLimit({ maxSize: 5 * 1024 * 1024, onError: (c) => c.json({ error: "Request exceeds the 5 MB limit." }, 413) }));
+  app.use("*", async (context, next) => {
+    const hostname = new URL(context.req.url).hostname;
+    if (!["127.0.0.1", "localhost", "[::1]"].includes(hostname)) return context.json({ error: "Host not allowed." }, 403);
+    const host = context.req.header("host");
+    if (host) {
+      try {
+        if (new URL(`http://${host}`).host !== new URL(context.req.url).host) return context.json({ error: "Host not allowed." }, 403);
+      } catch {
+        return context.json({ error: "Host not allowed." }, 403);
+      }
+    }
+    await next();
+  });
+  app.use("/api/*", async (context, next) =>
+    bodyLimit({
+      maxSize: (context.req.path === "/api/workspace/restore" ? 64 : 5) * 1024 * 1024,
+      onError: (c) => c.json({ error: "Request exceeds the size limit." }, 413),
+    })(context, next),
+  );
   app.use(
     "*",
     secureHeaders({
@@ -66,23 +97,61 @@ export function createApp(options: AppOptions) {
   app.get("/api/config", (context) =>
     context.json({
       provider: provider?.name ?? "OpenAI",
-      model: provider?.model ?? process.env.TESTPAQ_OPENAI_MODEL ?? "gpt-5-mini",
+      model: selectedModel,
       configured: Boolean(provider),
       providerStatus,
       fixturesEnabled: Boolean(options.fixturesEnabled),
     }),
   );
+  app.patch("/api/provider/model", async (context) => {
+    const { model } = z.object({ model: z.string().trim().min(1).max(100) }).parse(await context.req.json());
+    if (checking) return context.json({ error: "Wait for the API access check to finish." }, 409);
+    if (provider && !provider.withModel && model !== provider.model)
+      return context.json({ error: "This provider does not support model selection." }, 400);
+    options.store.setSetting("openai_model", model);
+    selectedModel = model;
+    if (provider?.withModel) provider = provider.withModel(model);
+    providerStatus = {
+      status: provider ? "unchecked" : "unconfigured",
+      message: "Model selected. API access has not been checked for this model.",
+      billingUrl: BILLING_URL,
+    };
+    return context.json({
+      provider: provider?.name ?? "OpenAI",
+      model,
+      configured: Boolean(provider),
+      providerStatus,
+      fixturesEnabled: Boolean(options.fixturesEnabled),
+    });
+  });
+  app.post("/api/provider/models", async (context) => {
+    if (!provider?.listModels) return context.json({ error: "Link an OpenAI key before loading available models." }, 503);
+    try {
+      return context.json(await provider.listModels());
+    } catch (error) {
+      const detail = providerError(error);
+      return context.json({ error: detail.message, code: detail.code }, 502);
+    }
+  });
   app.post("/api/provider/check", async (context) => {
-    if (checking) return context.json({ error: "An API access check is already running." }, 409);
     const body = z
       .object({ apiKey: z.string().trim().min(1).max(500).optional(), model: z.string().trim().min(1).max(100).optional() })
       .parse(await context.req.json());
-    if (body.apiKey) provider = new OpenAIAnalysisProvider(body.apiKey, body.model || process.env.TESTPAQ_OPENAI_MODEL);
+    if (checking) return context.json({ error: "An API access check is already running." }, 409);
+    if (body.model && body.model !== selectedModel) {
+      if (provider && !body.apiKey && !provider.withModel)
+        return context.json({ error: "This provider does not support model selection." }, 400);
+      options.store.setSetting("openai_model", body.model);
+      selectedModel = body.model;
+      if (provider?.withModel) provider = provider.withModel(selectedModel);
+    }
+    if (body.apiKey) provider = new OpenAIAnalysisProvider(body.apiKey, selectedModel);
     if (!provider) return context.json({ error: "Add or link an OpenAI API key first." }, 503);
     checking = true;
+    const checkedProvider = provider;
     try {
-      if (!provider.checkAccess) throw new Error("This provider does not support an access check.");
-      await provider.checkAccess();
+      if (!checkedProvider.checkAccess) throw new Error("This provider does not support an access check.");
+      await checkedProvider.checkAccess();
       providerStatus = {
         status: "ready",
         message: "API access verified. A small billable request succeeded; exact remaining credit is available in OpenAI billing.",
@@ -97,11 +166,30 @@ export function createApp(options: AppOptions) {
     }
     return context.json({
       provider: provider.name,
-      model: provider.model,
+      model: selectedModel,
       configured: true,
       fixturesEnabled: Boolean(options.fixturesEnabled),
       providerStatus,
     });
+  });
+
+  app.post("/api/workspace/backup", (context) => {
+    if (activeAnalyses.size || checking)
+      return context.json({ error: "Wait for analysis or the access check to finish before backing up." }, 409);
+    return context.json(options.store.backup());
+  });
+  app.post("/api/workspace/restore", async (context) => {
+    const body = await context.req.json();
+    if (activeAnalyses.size || checking)
+      return context.json({ error: "Wait for analysis or the access check to finish before restoring." }, 409);
+    options.store.restore(body);
+    selectedModel = options.store.getSetting("openai_model") ?? process.env.TESTPAQ_OPENAI_MODEL ?? "gpt-5-mini";
+    if (provider?.withModel) provider = provider.withModel(selectedModel);
+    providerStatus = {
+      status: provider ? "unchecked" : "unconfigured",
+      message: "Workspace restored. Check access for the selected model.",
+    };
+    return context.json({ restored: true });
   });
 
   const GroupBody = z.object({ name: z.string().trim().min(1).max(100) });
@@ -124,7 +212,22 @@ export function createApp(options: AppOptions) {
     options.store.removeGroup(context.req.param("id")) ? context.body(null, 204) : context.json({ error: "Group not found." }, 404),
   );
 
-  app.get("/api/testpaqs", (context) => context.json(options.store.list()));
+  const pagination = (context: { req: { query: (name: string) => string | undefined } }) =>
+    z
+      .object({
+        limit: z.coerce.number().int().min(1).max(200).default(100),
+        offset: z.coerce.number().int().min(0).max(1000000).default(0),
+      })
+      .parse({ limit: context.req.query("limit"), offset: context.req.query("offset") });
+  app.get("/api/testpaqs", (context) => {
+    const { limit, offset } = pagination(context);
+    const query = z
+      .string()
+      .max(300)
+      .parse(context.req.query("query") ?? "");
+    const group = z.union([z.literal("all"), z.literal("ungrouped"), z.uuid()]).parse(context.req.query("group") ?? "all");
+    return context.json(options.store.list(limit, offset, query, group));
+  });
   app.post("/api/testpaqs", async (context) => {
     const body = z.object({ title: z.string().trim().min(1).max(300), groupId: z.uuid().optional() }).parse(await context.req.json());
     if (body.groupId && !options.store.listGroups().some((group) => group.id === body.groupId))
@@ -158,6 +261,18 @@ export function createApp(options: AppOptions) {
         { error: "This Testpaq changed in another tab. Reload before saving to avoid overwriting changes.", code: "save_conflict" },
         409,
       );
+    if (existing.status === "completed" || body.status === "completed") {
+      const content = (value: Testpaq) => {
+        const { status: _status, completedAt: _completedAt, exportedAt: _exportedAt, updatedAt: _updatedAt, ...rest } = value;
+        return rest;
+      };
+      if (JSON.stringify(content(body)) !== JSON.stringify(content(existing)))
+        return context.json({ error: "Reopen this Testpaq before changing its content.", code: "completed_readonly" }, 409);
+      if (existing.status === "completed" && body.status !== "completed" && body.status !== "in_review")
+        return context.json({ error: "Reopen completed Testpaqs to In review." }, 400);
+    }
+    if (body.status === "completed") body.completedAt = existing.completedAt ?? new Date().toISOString();
+    else delete body.completedAt;
     if (body.groupId && !options.store.listGroups().some((group) => group.id === body.groupId))
       return context.json({ error: "Group not found." }, 400);
     return context.json(
@@ -171,7 +286,10 @@ export function createApp(options: AppOptions) {
   app.delete("/api/testpaqs/:id", (context) =>
     options.store.remove(context.req.param("id")) ? context.body(null, 204) : context.json({ error: "Testpaq not found." }, 404),
   );
-  app.get("/api/testpaqs/:id/history", (context) => context.json(options.store.getRuns(context.req.param("id"))));
+  app.get("/api/testpaqs/:id/history", (context) => {
+    const { limit, offset } = pagination(context);
+    return context.json(options.store.getRuns(context.req.param("id"), limit, offset));
+  });
   app.get("/api/testpaqs/:id/export", (context) => {
     const item = options.store.get(context.req.param("id"));
     if (!item) return context.json({ error: "Testpaq not found." }, 404);
@@ -180,6 +298,88 @@ export function createApp(options: AppOptions) {
     context.header("content-disposition", `attachment; filename="${fileName}"`);
     return context.body(renderMarkdown(item, context.req.query("rejected") === "1"));
   });
+  app.get("/api/testpaqs/:id/qase.csv", (context) => {
+    const item = options.store.get(context.req.param("id"));
+    if (!item) return context.json({ error: "Testpaq not found." }, 404);
+    context.header("content-type", "text/csv; charset=utf-8");
+    context.header("content-disposition", `attachment; filename="${slug(item.ticket.reference || item.title)}-qase.csv"`);
+    return context.body(renderQaseCsv(item));
+  });
+  app.post("/api/test-cases/draft", async (context) => {
+    const request = z
+      .object({ testpaqId: z.uuid(), scenarioId: z.uuid(), updatedAt: z.iso.datetime(), model: z.string().trim().min(1).max(100) })
+      .parse(await context.req.json());
+    const original = options.store.get(request.testpaqId);
+    if (!original) return context.json({ error: "Testpaq not found." }, 404);
+    if (original.status === "completed") return context.json({ error: "Reopen this Testpaq before drafting cases." }, 409);
+    if (activeAnalyses.has(original.id)) return context.json({ error: "Analysis is already running for this Testpaq." }, 409);
+    if (original.updatedAt !== request.updatedAt)
+      return context.json({ error: "The Testpaq changed. Save or reload before drafting cases.", code: "analysis_conflict" }, 409);
+    if (request.model !== selectedModel)
+      return context.json({ error: "The selected model changed. Reopen the draft dialog.", code: "model_conflict" }, 409);
+    const parent = original.scenarios.find((value) => value.id === request.scenarioId);
+    if (!parent || parent.review !== "accepted" || parent.archived || parent.scopeReviewRequired)
+      return context.json({ error: "Choose accepted, current coverage before drafting cases." }, 400);
+    const currentProvider = provider;
+    if (!currentProvider?.generateCases)
+      return context.json({ error: "Connect OpenAI to draft test cases. Manual case creation remains available." }, 503);
+    const input = CaseGenerationInputSchema.parse({
+      testpaqId: original.id,
+      model: selectedModel,
+      scenarioId: parent.id,
+      ticket: original.ticket,
+      requirements: original.requirements.filter((value) => parent.requirementIds.includes(value.id)),
+      questions: original.questions,
+      scenarios: [parent],
+      testCases: (original.testCases ?? []).filter((value) => value.scenarioId === parent.id),
+    });
+    const run = options.store.startRun({
+      testpaqId: original.id,
+      provider: currentProvider.name,
+      model: currentProvider.model,
+      promptVersion: "testpaq-test-cases-v1",
+      disclosure: `Draft cases for ${parent.title}: ticket fields, ${input.requirements.length} linked requirements, ${input.questions?.length ?? 0} questions/answers, one coverage output and ${input.testCases.length} existing linked cases`,
+      inputHash: createHash("sha256").update(JSON.stringify(input)).digest("hex"),
+      inputSnapshot: input,
+    });
+    activeAnalyses.add(original.id);
+    try {
+      const signal = options.shutdownSignal ? AbortSignal.any([context.req.raw.signal, options.shutdownSignal]) : context.req.raw.signal;
+      const result = CaseGenerationResultSchema.parse(await currentProvider.generateCases(input, signal));
+      if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
+      const latest = options.store.get(original.id);
+      if (!latest || latest.updatedAt !== original.updatedAt) {
+        options.store.failRun(run.id, "analysis_conflict");
+        return context.json({ error: "The Testpaq changed during drafting. No cases were applied.", code: "analysis_conflict" }, 409);
+      }
+      const completed = options.store.database.transaction(() => {
+        const item = applyGeneratedCases(latest, parent.id, result, run.id);
+        const runRecord = options.store.finishRun(run.id, result);
+        options.store.save(item);
+        return { item, run: runRecord };
+      })();
+      if (provider === currentProvider)
+        providerStatus = {
+          status: "ready",
+          message: "API access verified by successful case drafting.",
+          checkedAt: new Date().toISOString(),
+          billingUrl: BILLING_URL,
+        };
+      return context.json(completed);
+    } catch (error) {
+      if (context.req.raw.signal.aborted || options.shutdownSignal?.aborted || (error instanceof Error && error.name === "AbortError")) {
+        options.store.failRun(run.id, "cancelled");
+        return context.json({ error: "Case drafting cancelled.", runId: run.id }, 409);
+      }
+      const detail = providerError(error);
+      options.store.failRun(run.id, detail.code);
+      if (provider === currentProvider && detail.code !== "invalid_analysis") providerStatus = { status: "error", ...detail };
+      return context.json({ error: detail.message, code: detail.code, billingUrl: detail.billingUrl, runId: run.id }, 502);
+    } finally {
+      activeAnalyses.delete(original.id);
+    }
+  });
+
   app.post("/api/analyse", async (context) => {
     const input = AnalysisInputSchema.parse(await context.req.json());
     const original = options.store.get(input.testpaqId);
@@ -195,6 +395,12 @@ export function createApp(options: AppOptions) {
         { error: "Save the latest changes before analysing. The Testpaq has changed; reload and retry.", code: "analysis_conflict" },
         409,
       );
+    if (input.model && input.model !== selectedModel)
+      return context.json(
+        { error: "The selected model changed. Reopen analysis to review the current model.", code: "model_conflict" },
+        409,
+      );
+    if (original.status === "completed") return context.json({ error: "Reopen this Testpaq before analysing." }, 409);
     const currentProvider = provider;
     const providerName = currentProvider?.name ?? "OpenAI";
     const model = currentProvider?.model ?? process.env.TESTPAQ_OPENAI_MODEL ?? "gpt-5-mini";
@@ -215,8 +421,9 @@ export function createApp(options: AppOptions) {
     }
     activeAnalyses.add(input.testpaqId);
     try {
-      const result = await currentProvider.analyse(input, context.req.raw.signal);
-      if (context.req.raw.signal.aborted) throw new DOMException("Cancelled", "AbortError");
+      const signal = options.shutdownSignal ? AbortSignal.any([context.req.raw.signal, options.shutdownSignal]) : context.req.raw.signal;
+      const result = await currentProvider.analyse(input, signal);
+      if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
       const latest = options.store.get(input.testpaqId);
       if (!latest || latest.updatedAt !== original.updatedAt) {
         options.store.failRun(run.id, "analysis_conflict");
@@ -228,7 +435,7 @@ export function createApp(options: AppOptions) {
       const completed = options.store.database.transaction(() => {
         // Validate the result and merged aggregate before committing either record.
         const validated = normalizeResult(AnalysisResultSchema.parse(result));
-        const item = applyAnalysis(latest, validated);
+        const item = applyAnalysis(latest, validated, run.id);
         const runRecord = options.store.finishRun(run.id, validated);
         options.store.save(item);
         return { run: runRecord, result: runRecord.result, item };
@@ -242,7 +449,7 @@ export function createApp(options: AppOptions) {
         };
       return context.json(completed);
     } catch (error) {
-      if (context.req.raw.signal.aborted || (error instanceof Error && error.name === "AbortError")) {
+      if (context.req.raw.signal.aborted || options.shutdownSignal?.aborted || (error instanceof Error && error.name === "AbortError")) {
         options.store.failRun(run.id, "cancelled");
         return context.json({ error: "Analysis cancelled.", runId: run.id }, 409);
       }

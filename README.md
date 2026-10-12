@@ -1,96 +1,109 @@
 # Testpaq
 
-Testpaq is a local-first QA change-review workbench. Paste a product ticket, make its requirements explicit, review structured QA scenarios, preserve requirement traceability, classify intended coverage, and export a clean Markdown coverage brief.
+Turn a product ticket into a QA review you can explain and hand off.
 
-AI proposes. Humans decide. A scenario always keeps its historically truthful origin: **explicit**, **inferred**, or **human**.
+Testpaq keeps tickets, requirements, test scenarios and open questions together in a local workspace. AI can propose coverage; you decide what to keep, how to test it and when the review is complete.
 
-## v0.2 capabilities
+## Get started
 
-- Persistent project groups, group filtering, renaming and moving existing Testpaqs
-- Visible answers on every question, with a refresh offer after all remaining questions are answered
-- Refresh analysis using current scope, answers and existing coverage while retaining review decisions and human edits
-- Server-side atomic analysis application and conflict protection for multiple browser tabs
-- Automatic .env loading, missing-key warnings and a single install/build/run command
-- Session-only API key linking, explicit billable-access checks and actionable billing errors
-- Local Testpaq, ticket, requirement, scenario, question, and analysis-history management
-- Transactional SQLite persistence and automatic text-edit saving
-- OpenAI analysis behind a small validated provider boundary
-- Explicit/inferred provenance and requirement-to-scenario traceability
-- Fast scenario review with filters, bulk actions, keyboard shortcuts, and undo
-- Independent Manual, Qase candidate, and Automation candidate intentions
-- Question resolution/dismissal, risk visibility, and uncovered-requirement reporting
-- Deterministic Markdown preview, copy, and download
-- System, light, and dark themes
-- Development-only realistic and 200-scenario fixtures
-
-Qase writes, repository inspection, Cypress generation, GitHub/PR analysis, execution evidence, accounts, cloud sync, and collaboration are deliberately outside v0.2.
-
-## Requirements
-
-- Node.js 22 or newer
-- npm
-- An OpenAI API key only if AI analysis is required; all manual functionality works without one
-
-## Install and run
+You need **Node.js 22 or newer** and npm. An OpenAI API key is optional: you can write and review everything manually.
 
 ```bash
 cp .env.example .env
-# Edit .env to add OPENAI_API_KEY if you want AI analysis.
+# Optional: add your OPENAI_API_KEY to .env
 npm run run
 ```
 
-The single run command installs dependencies when the lockfile or Node ABI changes, builds the UI/server, loads configuration and starts Testpaq. For future launches, use the same command; no shell sourcing is required.
+Testpaq installs dependencies, builds and opens in your browser. Use the same command next time. Your work stays in a local SQLite database. Stop the app with `Ctrl+C`; use `npm run run -- --no-open` if you prefer to open the browser yourself.
 
-Testpaq binds to `127.0.0.1`, selects an available port, opens the default browser, and stops cleanly with `Ctrl+C`. To avoid opening the browser:
+## A typical review
 
-```bash
-npm run run -- --no-open
-```
+1. Create a Testpaq and paste your ticket. Organise related work into project groups.
+2. Clarify the requirements yourself or choose **Analyse ticket**. Before AI runs, you see the model and what content will be sent.
+3. Accept, reject or edit the proposed scenarios. Answer open questions and refresh analysis when scope changes. Review decisions and human edits survive refreshes; affected accepted cases get a scope-review reminder.
+4. Open **Test cases** for an accepted coverage output. Add cases manually or confirm **Draft test cases with AI**. One output can have several cases; each case has its own setup, data, steps and expected results.
+5. Review each case, resolve missing details and choose **Qase CSV** or **To be automated in Qase**. Open **Coverage brief** to preview and download the handoff.
+6. Choose **Mark completed** when the review is finished. You can still read, filter and export it; **Reopen Testpaq** lets you make changes.
 
-For a shorter launch after a build, use `npm start`. Optional global CLI installation:
+Completion records your review decision. It does not claim tests have run or passed.
 
-```bash
-npm link
-testpaq
-```
+## Linked test cases and Qase handoff
 
-For local development, with fixture controls enabled (run `npm install` first):
+Accepting a coverage output agrees that the behaviour needs testing. Accepting its linked cases agrees how to test it. AI-generated cases start as proposals; content edits return an accepted case to Proposed. Changed ticket scope, linked requirements or recorded answers flag cases for review. Existing decisions and human edits survive refresh and additional drafting.
 
-```bash
-npm run dev
-```
+| Test case selection                                                | Qase CSV result                      |
+| ------------------------------------------------------------------ | ------------------------------------ |
+| Accepted, current + Qase CSV                                       | Manual test case                     |
+| Accepted, current + To be automated                                | Test case marked **To be automated** |
+| Both selections                                                    | One case, marked **To be automated** |
+| Manual only, proposed, rejected, archived or awaiting scope review | Excluded                             |
 
-The UI runs at `http://127.0.0.1:5173`; the API runs at `http://127.0.0.1:4178`.
+The parent coverage output must also be accepted, current and unarchived. Existing coverage summaries are preserved; **Convert coverage to draft case** creates a proposal for you to flesh out and review. A coverage summary alone no longer becomes a Qase case.
 
-## AI configuration
+Inspect the inclusion preview, then choose **Download Qase CSV**. In your Qase project repository, select **Import Data → Qase.io**, upload the file and choose a parent suite. Every selected case becomes one native Qase v2 record with preconditions, postconditions, ordered actions/data/results, requirement references, provenance and stable local IDs.
 
-Testpaq implements one provider: OpenAI. The server never returns credentials to the browser, persists them in SQLite, places them in URLs or includes them in exports. You can optionally enter a key in the OpenAI connection dialog; it is sent only to the local service, used for an access check, cleared from the form and held in server memory until restart.
+The CSV creates new cases: importing it twice can create duplicates. **Cypress implementation is outside v0.3.** To be automated is a planning flag; Testpaq does not generate or execute automation, or write directly to Qase. See [Qase's import format](https://docs.qase.io/en/articles/14441496-qase-csv-adding-test-steps).
 
-```bash
-# .env (never commit this file)
-OPENAI_API_KEY=your-key
-TESTPAQ_OPENAI_MODEL=gpt-5-mini
-```
+You can also copy or download a Markdown coverage brief for a ticket, pull request or review discussion.
 
-`.env` is loaded before the provider is created, in both development and compiled CLI launches. The working directory's `.env` takes precedence over the repository's `.env`; explicitly exported shell variables take precedence over both. Set `TESTPAQ_ENV_FILE=/absolute/path/.env` to select a specific file. Editing `.env` requires a server restart, but does not require rebuilding. Builds and startup warn when the key is missing or blank, while leaving manual functionality available.
+## Choose your AI model
 
-**Check OpenAI** opens an explicit access check using the configured model. It sends only “Reply with OK” in a small billable request. Listing models would only prove authentication, not billable access. The app distinguishes an unchecked key, verified access and errors; it does not claim an exact credit balance. Billing/quota failures include an explanation and [OpenAI API billing](https://platform.openai.com/settings/organization/billing/overview). Invalid keys, model permissions, rate limits, network failures and timeouts receive separate messages. Successful analysis also verifies access. No check is sent automatically at startup.
+Open the OpenAI settings in the top bar. Enter a model ID, or choose **Load available models** for account suggestions, then **Save model**. Your choice survives restarts. Saving is local; loading models contacts OpenAI. Some listed models may not support the structured responses needed for analysis.
 
-Before each analysis, Testpaq shows the provider, model, and exact classes of content that will leave the device. Ticket content is framed as untrusted data. The disclosed input includes current questions and their recorded answers, current requirements (including inactive ones) and existing scenarios. Provider output must pass the Zod schema and provenance invariants before any result is added; a malformed response is recorded as a failed Analysis Run and otherwise discarded.
+**Check access** makes a small billable request. Analysis also uses your API account. Neither happens automatically at startup. A key entered through the dialog stays in server memory until restart; a key in `.env` is available on subsequent launches.
 
-## Local data and privacy
+## Keep your work safe
 
-The SQLite database lives at:
+Edits save automatically. If a save fails, use **Retry save**. A browser draft buffer preserves pending edits across reloads and offers a comparison when another tab has changed the same Testpaq. Resolve overlapping edits before saving the merged draft.
 
-- macOS: `~/Library/Application Support/Testpaq/testpaq.db`
-- Linux: `${XDG_DATA_HOME:-~/.local/share}/testpaq/testpaq.db`
-- Windows: `%LOCALAPPDATA%/Testpaq/testpaq.db`
+Use **Backup / restore** to download the complete workspace, including groups, analysis history and model preference. Keep the file somewhere safe: it contains your ticket content, but no API key. Restoring replaces the workspace; the server first creates a local safety snapshot. Database migrations also make a local snapshot, and a second app instance cannot open the same database concurrently.
 
-Set `TESTPAQ_DATA_DIR` to use another directory. Testpaq makes no OpenAI network request until the user confirms an analysis or an API access check. Responses use `store: false`. It does not read repositories, arbitrary files, environment variables other than its documented configuration, or unrelated Testpaqs for analysis.
+AI requests send the disclosed ticket, requirements, questions/answers and scenarios to OpenAI. Manual work stays local. Testpaq has no cloud sync or telemetry; OpenAI requests use `store: false`.
 
-The production service binds only to loopback. Each launch creates a random session token embedded in the served page (not the URL or logs); mutating API requests require the token and same-origin validation. Imported content is rendered as text, API inputs are validated, SQL is parameterised, and content/AI bodies are not logged.
+## Gallery
 
-## Quality checks
+These are screenshots of the running app with synthetic example data. No real customer content or external AI calls were used.
+
+### Your workspace
+
+![Project groups and Testpaqs](docs/gallery/projects.png)
+
+### Ticket and requirements
+
+![Ticket with traceable requirements](docs/gallery/ticket.png)
+
+### Review scenarios
+
+![Scenario review with destinations and provenance](docs/gallery/review.png)
+
+### Detailed test cases
+
+![Several reviewed test cases linked to one coverage output](docs/gallery/test-cases.png)
+
+### Qase export
+
+![Coverage brief and Qase CSV inclusion preview](docs/gallery/qase-export.png)
+
+### Completed review
+
+![Completed Testpaq remains readable](docs/gallery/completed.png)
+
+### Model settings
+
+![Choose an OpenAI model](docs/gallery/model-settings.png)
+
+<details>
+<summary>Dark theme and mobile view</summary>
+
+![Ticket in dark theme](docs/gallery/dark-ticket.png)
+
+<img src="docs/gallery/mobile-export.png" alt="Coverage export on a mobile screen" width="390" />
+
+</details>
+
+## Development and review evidence
+
+For configuration, data locations and architecture, see [the technical guide](docs/DEVELOPMENT.md). Run the checks with:
 
 ```bash
 npm run lint
@@ -100,26 +113,6 @@ npm run build
 npm run format:check
 ```
 
-## Architecture
+`npm run test:browser` exercises the built app with a synthetic provider. Install Chromium with `npx playwright install chromium`, or set `TESTPAQ_BROWSER_PATH` to an installed Chromium executable. `npm run gallery` repeats that workflow and captures the screenshots above.
 
-```text
-testpaq CLI
-  └─ Hono localhost service
-       ├─ React 19 + Vite browser UI
-       ├─ application routes and validation
-       ├─ SQLite aggregate store + analysis-run records
-       ├─ OpenAI AnalysisProvider adapter
-       └─ deterministic Markdown export
-```
-
-## Groups, answers and refresh
-
-Create a project group on the Testpaqs page, choose it when creating a Testpaq, or move an existing Testpaq with its Project group selector. Filter by group or Ungrouped; Manage group lets you rename or remove it. Removing a group preserves all its Testpaqs under Ungrouped. v0.1 Testpaqs migrate automatically and initially remain ungrouped.
-
-Write an answer directly under each question, then select **Save answer** to resolve it. A blank answer cannot resolve a question. Answers survive reopening and appear in the Markdown coverage brief and analysis-history snapshot. After the last remaining question is answered, the app offers **Refresh Testpaq**; this opens the normal disclosure dialog before any content is sent.
-
-Update ticket fields, QA context or requirements as needed, then choose **Refresh analysis**. The app saves pending edits first and disables editing during analysis. Refresh reuses matching scenario IDs or titles, updates unreviewed generated proposals, and adds new coverage. It preserves accepted/rejected scenarios, human edits, destinations, requirement provenance and existing answers. It does not automatically delete old coverage or reactivate rejected requirements: review previous scenarios when scope is removed. A changed-scope requirement is added separately rather than rewriting an old one. Matching relies on IDs and normalised text, so semantically equivalent paraphrases may still need manual review.
-
-Changes to ticket scope, requirements or answers show a refresh reminder. New analysis and its history record are committed atomically on the server. Conflicting saves from another tab or changes during analysis are rejected rather than silently overwriting newer data.
-
-The complete Testpaq is stored as a validated aggregate, making autosave and bulk review changes atomic. Analysis runs are separate rows linked by foreign key so a new run cannot erase historical provenance. There is no client state framework, ORM, desktop shell, external database, telemetry, or background service.
+The [whole-app forensic review](FORENSIC_REVIEW.md) records the findings before fixes. The [remediation report](REMEDIATION.md) explains the fixes and validation. Live OpenAI generation and a real Qase import still require integration verification with your account.

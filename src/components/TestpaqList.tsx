@@ -1,5 +1,5 @@
 import { AlertCircle, ArrowRight, FileText, Plus, Search } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AppConfig } from "../App";
 import { api } from "../lib/api";
 import { formatRelative, label } from "../lib/utils";
@@ -8,6 +8,9 @@ import { Button } from "./ui/Button";
 import { Dialog } from "./ui/Dialog";
 
 export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (id: string) => void }) {
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const loadVersion = useRef(0);
   const [items, setItems] = useState<TestpaqSummary[]>([]);
   const [groups, setGroups] = useState<ProjectGroup[]>([]);
   const [groupFilter, setGroupFilter] = useState("all");
@@ -20,16 +23,28 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
   const [newOpen, setNewOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [error, setError] = useState("");
-  const load = () =>
-    Promise.all([api.list(), api.groups()])
-      .then(([items, groups]) => {
-        setItems(items);
-        setGroups(groups);
-      })
-      .catch((reason: Error) => setError(reason.message));
+  const load = useCallback(
+    async (offset = 0) => {
+      const version = ++loadVersion.current;
+      setLoading(true);
+      try {
+        const [nextItems, nextGroups] = await Promise.all([api.list({ offset, query, group: groupFilter }), api.groups()]);
+        if (version !== loadVersion.current) return;
+        setItems((previous) => (offset ? [...previous, ...nextItems] : nextItems));
+        setGroups(nextGroups);
+        setHasMore(nextItems.length === 100);
+      } catch (reason) {
+        if (version === loadVersion.current) setError((reason as Error).message);
+      } finally {
+        if (version === loadVersion.current) setLoading(false);
+      }
+    },
+    [query, groupFilter],
+  );
   useEffect(() => {
-    void load();
-  }, []);
+    const timer = setTimeout(() => void load(), 150);
+    return () => clearTimeout(timer);
+  }, [load]);
   const create = async () => {
     if (!title.trim() || busy) return;
     setBusy(true);
@@ -111,11 +126,11 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
         <label className="field">
           <span>Project group</span>
           <select value={groupFilter} onChange={(event) => setGroupFilter(event.target.value)}>
-            <option value="all">All groups ({items.length})</option>
-            <option value="ungrouped">Ungrouped ({items.filter((item) => !item.groupId).length})</option>
+            <option value="all">All groups</option>
+            <option value="ungrouped">Ungrouped</option>
             {groups.map((group) => (
               <option key={group.id} value={group.id}>
-                {group.name} ({items.filter((item) => item.groupId === group.id).length})
+                {group.name}
               </option>
             ))}
           </select>
@@ -151,6 +166,7 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
         </label>
         <span>
           {filtered.length} {filtered.length === 1 ? "item" : "items"}
+          {hasMore ? " loaded" : ""}
         </span>
       </div>
       <section className="work-list" aria-label="Recent Testpaqs">
@@ -200,6 +216,11 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
           </div>
         )}
       </section>
+      {hasMore && (
+        <Button variant="secondary" disabled={loading} onClick={() => void load(items.length)}>
+          Load more Testpaqs
+        </Button>
+      )}
       <Dialog
         open={newOpen}
         onOpenChange={(value) => {

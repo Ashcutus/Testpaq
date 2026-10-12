@@ -15,6 +15,9 @@ export function ProviderSettings({
   config?: AppConfig;
   onConfig: (config: AppConfig) => void;
 }) {
+  const [draftModel, setModel] = useState<string>();
+  const model = draftModel ?? config?.model ?? "gpt-5-mini";
+  const [models, setModels] = useState<string[]>([]);
   const [key, setKey] = useState("");
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState("");
@@ -22,11 +25,33 @@ export function ProviderSettings({
     setChecking(true);
     setError("");
     try {
-      onConfig(await api.checkProvider(key.trim() || undefined));
+      onConfig(await api.checkProvider(key.trim() || undefined, model.trim()));
     } catch (reason) {
       setError((reason as Error).message);
     } finally {
       setKey("");
+      setChecking(false);
+    }
+  };
+  const saveModel = async () => {
+    setChecking(true);
+    setError("");
+    try {
+      onConfig(await api.selectModel(model.trim()));
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setChecking(false);
+    }
+  };
+  const loadModels = async () => {
+    setChecking(true);
+    setError("");
+    try {
+      setModels(await api.models());
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
       setChecking(false);
     }
   };
@@ -36,6 +61,7 @@ export function ProviderSettings({
       onOpenChange={(value) => {
         if (!checking) {
           setKey("");
+          setModel(undefined);
           onOpenChange(value);
         }
       }}
@@ -43,14 +69,39 @@ export function ProviderSettings({
       title="OpenAI connection"
       description="Verify that the configured model can make a billable API request."
       footer={
-        <Button onClick={check} disabled={checking || (!config?.configured && !key.trim())}>
+        <Button onClick={check} disabled={checking || !model.trim() || (!config?.configured && !key.trim())}>
           {checking ? "Checking…" : key.trim() ? "Link and check key" : "Check API access"}
         </Button>
       }
     >
       <p>{config?.providerStatus.message || "Loading connection status…"}</p>
-      <p>
-        Model: <strong>{config?.model || "gpt-5-mini"}</strong>
+      <label className="field">
+        <span>Analysis model</span>
+        <input
+          list="openai-models"
+          value={model}
+          maxLength={100}
+          onChange={(event) => setModel(event.target.value)}
+          disabled={checking}
+          placeholder="Enter an OpenAI model ID"
+        />
+        <datalist id="openai-models">
+          {models.map((id) => (
+            <option key={id} value={id} />
+          ))}
+        </datalist>
+      </label>
+      <div className="button-group">
+        <Button variant="secondary" onClick={saveModel} disabled={checking || !model.trim() || model.trim() === config?.model}>
+          Save model
+        </Button>
+        <Button variant="ghost" onClick={loadModels} disabled={checking || !config?.configured}>
+          Load available models
+        </Button>
+      </div>
+      <p className="privacy-note">
+        Choose from loaded models or enter a model ID. Selection is saved for future launches. Loading models sends an explicit request to
+        OpenAI; availability does not guarantee support for structured analysis.
       </p>
       <label className="field">
         <span>API key for this session (optional)</span>

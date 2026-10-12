@@ -46,15 +46,26 @@ export function TicketPanel({
           <span>
             Reference <em>Optional</em>
           </span>
-          <input value={item.ticket.reference} onChange={(event) => ticketField("reference", event.target.value)} placeholder="EM-2841" />
+          <input
+            maxLength={100}
+            value={item.ticket.reference}
+            onChange={(event) => ticketField("reference", event.target.value)}
+            placeholder="EM-2841"
+          />
         </label>
         <label className="field">
           <span>Ticket title</span>
-          <input value={item.ticket.title} onChange={(event) => ticketField("title", event.target.value)} placeholder="What is changing?" />
+          <input
+            maxLength={300}
+            value={item.ticket.title}
+            onChange={(event) => ticketField("title", event.target.value)}
+            placeholder="What is changing?"
+          />
         </label>
         <label className="field full">
           <span>Description</span>
           <textarea
+            maxLength={30000}
             rows={5}
             value={item.ticket.description}
             onChange={(event) => ticketField("description", event.target.value)}
@@ -64,6 +75,7 @@ export function TicketPanel({
         <label className="field full">
           <span>Acceptance criteria</span>
           <textarea
+            maxLength={30000}
             rows={6}
             value={item.ticket.acceptanceCriteria}
             onChange={(event) => ticketField("acceptanceCriteria", event.target.value)}
@@ -75,6 +87,7 @@ export function TicketPanel({
             QA context <em>Optional</em>
           </span>
           <textarea
+            maxLength={20000}
             rows={3}
             value={item.ticket.qaContext}
             onChange={(event) => ticketField("qaContext", event.target.value)}
@@ -97,7 +110,9 @@ export function TicketPanel({
             <div className={`requirement-row ${!requirement.active ? "is-inactive" : ""}`} key={requirement.id}>
               <span className="requirement-number">R{index + 1}</span>
               <textarea
+                aria-invalid={!requirement.text.trim()}
                 aria-label={`Requirement ${index + 1}`}
+                maxLength={4000}
                 rows={2}
                 value={requirement.text}
                 onChange={(event) =>
@@ -107,6 +122,7 @@ export function TicketPanel({
                   })
                 }
               />
+              {!requirement.text.trim() && <span className="attention">Requirement text is required before saving.</span>}
               <span className="source-label">{label(requirement.source)}</span>
               <button
                 className="icon-button"
