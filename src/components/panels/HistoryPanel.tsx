@@ -69,6 +69,7 @@ export function HistoryPanel({ testpaqId, version }: { testpaqId: string; versio
               </span>
               <div>
                 <strong>
+                  {run.promptVersion.startsWith("testpaq-test-cases") ? "Test case drafting · " : "Coverage analysis · "}
                   {run.provider} · {run.model}
                 </strong>
                 <span>{run.disclosure}</span>
@@ -97,6 +98,18 @@ export function HistoryPanel({ testpaqId, version }: { testpaqId: string; versio
                           {run.inputSnapshot.questions!.map((question) => (
                             <li key={question.id}>
                               {question.status}: {question.text} — {question.resolution || "No answer"}
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                    {run.inputSnapshot.testCases && (
+                      <>
+                        <h4>Existing linked test cases</h4>
+                        <ul>
+                          {run.inputSnapshot.testCases.map((value) => (
+                            <li key={value.id}>
+                              {value.review}: {value.title} — {value.steps.length} steps
                             </li>
                           ))}
                         </ul>

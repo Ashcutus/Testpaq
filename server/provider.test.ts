@@ -59,3 +59,37 @@ describe("OpenAI provider boundary", () => {
     expect(request.input).not.toContain("test-only-secret");
   });
 });
+
+it("drafts detailed cases from disclosed linked scope without generating Cypress code", async () => {
+  const item = makeFixture();
+  const output = {
+    testCases: [
+      {
+        clientId: "case1",
+        title: "Hidden amount persists",
+        objective: "Verify stored visibility",
+        preconditions: "Owner signed in",
+        postconditions: "Restore visibility",
+        steps: [{ action: "Reload campaign", data: "", expectedResult: "Amount stays hidden" }],
+        unknowns: ["Confirm how to access the visibility control"],
+      },
+    ],
+  };
+  mocks.create.mockResolvedValue({ output_text: JSON.stringify(output) });
+  const provider = new OpenAIAnalysisProvider("test-only-secret", "selected-model");
+  const input = {
+    testpaqId: item.id,
+    scenarioId: item.scenarios[0].id,
+    ticket: item.ticket,
+    requirements: item.requirements.slice(0, 1),
+    questions: item.questions,
+    scenarios: [item.scenarios[0]],
+    testCases: [],
+  };
+  expect(await provider.generateCases(input)).toEqual(output);
+  const request = mocks.create.mock.calls[0][0];
+  expect(request).toMatchObject({ store: false, model: "selected-model", text: { format: { name: "testpaq_test_cases", strict: true } } });
+  expect(JSON.parse(request.input)).toEqual(JSON.parse(JSON.stringify(input)));
+  expect(request.instructions).toContain("Do not generate Cypress code");
+  expect(request.instructions).toContain("unknowns");
+});

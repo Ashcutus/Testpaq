@@ -9,6 +9,7 @@ import { serve } from "@hono/node-server";
 import { chromium } from "playwright";
 import { createApp } from "../dist-server/server/app.js";
 import { TestpaqStore } from "../dist-server/server/store.js";
+import { newTestCase } from "../dist-server/src/shared/test-cases.js";
 import { makeFixture } from "../dist-server/server/fixture.js";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -16,6 +17,7 @@ const directory = mkdtempSync(join(tmpdir(), "testpaq-browser-"));
 const store = new TestpaqStore(join(directory, "testpaq.db"));
 const group = store.saveGroup("Fundraising platform");
 const item = { ...makeFixture(), groupId: group.id };
+item.testCases = [{ ...newTestCase(item, item.scenarios[0]), title: "Owner hides amount", review: "accepted" }];
 store.save(item);
 store.save({ ...makeFixture(), id: crypto.randomUUID(), title: "Campaign sharing permissions", groupId: group.id });
 const providerFor = (model) => ({
@@ -24,6 +26,43 @@ const providerFor = (model) => ({
   withModel: providerFor,
   listModels: async () => ["gpt-5-mini", "gpt-4.1"],
   checkAccess: async () => undefined,
+  generateCases: async () => ({
+    testCases: [
+      {
+        clientId: "reload",
+        title: "Hidden amount stays hidden after reload",
+        objective: "Verify saved visibility after refresh",
+        preconditions: "Campaign owner is signed in and the campaign amount is visible.",
+        postconditions: "Restore the campaign amount to visible.",
+        unknowns: [],
+        steps: [
+          {
+            action: "Open the owner's campaign page",
+            data: "Existing campaign owned by the signed-in user",
+            expectedResult: "Campaign amount is visible",
+          },
+          { action: "Choose to hide the amount", data: "", expectedResult: "Amount is hidden on the campaign page" },
+          { action: "Reload the campaign page", data: "", expectedResult: "Amount remains hidden" },
+        ],
+      },
+      {
+        clientId: "reader",
+        title: "Anonymous reader sees no hidden campaign amount",
+        objective: "Verify the visitor view of the owner's choice",
+        preconditions: "Campaign owner has hidden the amount.",
+        postconditions: "Restore campaign visibility after the review.",
+        unknowns: [],
+        steps: [
+          {
+            action: "Open the campaign in a signed-out browser session",
+            data: "Campaign with amount hidden by the owner",
+            expectedResult: "Campaign loads without displaying the amount",
+          },
+          { action: "Reload the page", data: "", expectedResult: "Amount is still hidden" },
+        ],
+      },
+    ],
+  }),
   analyse: async (input) => ({
     requirements: input.requirements
       .filter((value) => value.active)
@@ -93,6 +132,18 @@ try {
   await page.getByRole("button", { name: "Expand scenario" }).first().waitFor();
   await page.getByRole("button", { name: "Expand scenario" }).first().click();
   await capture("review");
+  await page.getByRole("button", { name: /^Test cases/ }).click();
+  await page.getByRole("button", { name: "Accept current scope", exact: true }).click();
+  await page.getByRole("button", { name: "Draft test cases with AI", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Draft test cases", exact: true }).click();
+  await page.getByRole("button", { name: "Accept case", exact: true }).nth(2).waitFor();
+  assert.equal(await page.locator(".test-case-card").count(), 3);
+  // Existing case stays accepted; newly generated cases require explicit review.
+  await page.getByRole("button", { name: "Accept case", exact: true }).nth(1).click();
+  await page.getByRole("button", { name: "Accept case", exact: true }).nth(2).click();
+  // Keep the detailed generated case visible in the gallery.
+  await page.locator(".test-case-card > summary").first().click();
+  await capture("test-cases");
   await page.getByRole("button", { name: "Coverage brief", exact: true }).click();
   await page.getByRole("button", { name: "Download Qase CSV" }).waitFor();
   await capture("qase-export");
@@ -104,6 +155,9 @@ try {
   for await (const chunk of stream) csv += chunk.toString();
   assert.ok(csv.startsWith("v2.id,title,"));
   assert.ok(csv.includes("to-be-automated"));
+  assert.ok(csv.includes("Hidden amount stays hidden after reload"));
+  assert.ok(csv.includes("Anonymous reader sees no hidden campaign amount"));
+  assert.ok(csv.includes('3. ""Reload the campaign page""'));
   assert.ok(!csv.includes("Keyboard user can find"));
   await page.getByRole("button", { name: "Mark completed" }).click();
   await page.getByRole("button", { name: "Reopen Testpaq" }).waitFor();
@@ -111,6 +165,9 @@ try {
   await page.getByRole("button", { name: "Expand scenario" }).first().click();
   assert.equal(await page.getByLabel("Scenario title").getAttribute("readonly"), "");
   await capture("completed");
+  await page.getByRole("button", { name: /^Test cases/ }).click();
+  assert.ok(await page.getByLabel("Test case title").first().isDisabled());
+  assert.ok(await page.getByLabel("Coverage output").isEnabled());
   await page.getByRole("button", { name: /Check OpenAI|OpenAI verified/ }).click();
   await page.getByLabel("Analysis model").fill("gpt-4.1");
   await page.getByRole("button", { name: "Save model", exact: true }).click();
@@ -138,13 +195,16 @@ try {
   await page.getByRole("button", { name: "dark theme" }).click();
   await capture("dark-ticket");
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: /^Test cases/ }).click();
+  assert.ok(await page.getByLabel("Test case title").first().isVisible());
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   await page.getByRole("button", { name: "Coverage brief", exact: true }).click();
   assert.ok(await page.getByRole("button", { name: "Download Qase CSV" }).isVisible());
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   await capture("mobile-export");
   assert.deepEqual(errors, []);
   console.log(
-    "Browser checks passed: host rejection, autosave/refresh, Qase download, completion/inspection, model selection, backup, dark/mobile layouts.",
+    "Browser checks passed: host rejection, autosave/refresh, one-to-many case drafting/review, multi-step Qase download, completion/inspection, model selection, backup, dark/mobile layouts.",
   );
   if (gallery) console.log("Captured gallery in docs/gallery (synthetic data; no external API calls).");
 } finally {

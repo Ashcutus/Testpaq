@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { newTestCase } from "../shared/test-cases";
 import { makeFixture } from "../../server/fixture";
 import { api, ApiError } from "../lib/api";
 import type { Testpaq } from "../shared/domain";
@@ -129,6 +130,7 @@ describe("workbench persistence", () => {
 
 it("persists completion, keeps export navigation available and reopens for editing", async () => {
   const item = makeFixture();
+  item.testCases = [{ ...newTestCase(item, item.scenarios[0]), review: "accepted" }];
   vi.mocked(api.save).mockImplementation(async (snapshot) => ({ ...snapshot, updatedAt: "2026-10-01T12:00:01.000Z" }));
   await load(item);
   await act(async () => {

@@ -62,6 +62,8 @@ export const api = {
       body: JSON.stringify(input),
       signal,
     }),
+  draftCases: (input: { testpaqId: string; scenarioId: string; updatedAt: string; model: string }, signal?: AbortSignal) =>
+    request<{ item: Testpaq; run: AnalysisRun }>("/api/test-cases/draft", { method: "POST", body: JSON.stringify(input), signal }),
   history: (id: string, offset = 0) => request<AnalysisRun[]>(`/api/testpaqs/${id}/history?offset=${offset}`),
   fixture: (kind: "sample" | "stress") => request<Testpaq>(`/api/dev/fixtures/${kind}`, { method: "POST" }),
 };

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { newTestCase } from "./test-cases";
 import { makeFixture } from "../../server/fixture";
-import { QASE_HEADERS, qaseScenarios, renderQaseCsv } from "./qase";
+import { QASE_HEADERS, qaseCases, renderQaseCsv } from "./qase";
 
 // Read RFC 4180 cells independently of the exporter, including embedded newlines.
 function parseCsv(csv: string): string[][] {
@@ -43,6 +44,9 @@ describe("Qase native CSV export", () => {
     item.scenarios[3].review = "proposed";
     item.scenarios[4].destinations.automation = true;
     item.scenarios[4].review = "rejected";
+    item.testCases = item.scenarios
+      .slice(0, 5)
+      .map((parent) => ({ ...newTestCase(item, parent), title: parent.title, review: "accepted" }));
     const rows = parseCsv(renderQaseCsv(item));
     expect(rows[0]).toEqual(QASE_HEADERS);
     expect(rows).toHaveLength(4);
@@ -59,12 +63,24 @@ describe("Qase native CSV export", () => {
     scenario.destinations.qase = true;
     scenario.title = 'Check "£5", café';
     scenario.expectedOutcome = 'Shows "£5", correctly\nNo extra charge';
+    const testCase = newTestCase(item, scenario);
+    testCase.title = scenario.title;
+    testCase.review = "accepted";
+    testCase.preconditions = "Signed in as campaign owner";
+    testCase.steps = [
+      { id: crypto.randomUUID(), action: scenario.title, data: 'Amount: "£5"', expectedResult: scenario.expectedOutcome },
+      { id: crypto.randomUUID(), action: "Reload the page", data: "", expectedResult: "Preference persists" },
+    ];
+    item.testCases = [testCase];
     const csv = renderQaseCsv(item);
     const [headers, row] = parseCsv(csv);
     const field = (name: string) => row[headers.indexOf(name)];
     expect(field("title")).toBe(scenario.title);
-    expect(field("steps_actions")).toBe('1. "Check ""£5"", café"');
-    expect(field("steps_result")).toBe('1. "Shows ""£5"", correctly\nNo extra charge"');
+    expect(field("steps_actions")).toBe('1. "Check ""£5"", café"\n2. "Reload the page"');
+    expect(field("steps_result")).toBe('1. "Shows ""£5"", correctly\nNo extra charge"\n2. "Preference persists"');
+    expect(field("steps_data")).toBe('1. "Amount: ""£5"""\n2. ""');
+    expect(field("preconditions")).toBe(testCase.preconditions);
+    expect(field("description")).toContain(testCase.id);
     expect(field("description")).toContain(item.requirements[0].text);
     expect(renderQaseCsv(item)).toBe(csv);
   });
@@ -72,7 +88,7 @@ describe("Qase native CSV export", () => {
     const item = makeFixture();
     item.scenarios = [];
     const before = structuredClone(item);
-    expect(qaseScenarios(item)).toEqual([]);
+    expect(qaseCases(item)).toEqual([]);
     expect(renderQaseCsv(item)).toBe(`${QASE_HEADERS.join(",")}\r\n`);
     expect(item).toEqual(before);
   });

@@ -5,12 +5,21 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { secureHeaders } from "hono/secure-headers";
 import { z } from "zod";
-import { AnalysisInputSchema, AnalysisResultSchema, TestpaqSchema, type AnalysisResult, type Testpaq } from "../src/shared/domain.js";
+import {
+  CaseGenerationInputSchema,
+  CaseGenerationResultSchema,
+  AnalysisInputSchema,
+  AnalysisResultSchema,
+  TestpaqSchema,
+  type AnalysisResult,
+  type Testpaq,
+} from "../src/shared/domain.js";
 import { renderQaseCsv } from "../src/shared/qase.js";
 import { renderMarkdown } from "../src/shared/export.js";
 import { makeFixture } from "./fixture.js";
 import { OpenAIAnalysisProvider, type AnalysisProvider } from "./provider.js";
 import { BILLING_URL, providerError } from "./provider-errors.js";
+import { applyGeneratedCases } from "../src/shared/test-cases.js";
 import { applyAnalysis } from "../src/shared/analysis.js";
 import type { ProviderStatus } from "../src/shared/domain.js";
 import type { TestpaqStore } from "./store.js";
@@ -296,6 +305,81 @@ export function createApp(options: AppOptions) {
     context.header("content-disposition", `attachment; filename="${slug(item.ticket.reference || item.title)}-qase.csv"`);
     return context.body(renderQaseCsv(item));
   });
+  app.post("/api/test-cases/draft", async (context) => {
+    const request = z
+      .object({ testpaqId: z.uuid(), scenarioId: z.uuid(), updatedAt: z.iso.datetime(), model: z.string().trim().min(1).max(100) })
+      .parse(await context.req.json());
+    const original = options.store.get(request.testpaqId);
+    if (!original) return context.json({ error: "Testpaq not found." }, 404);
+    if (original.status === "completed") return context.json({ error: "Reopen this Testpaq before drafting cases." }, 409);
+    if (activeAnalyses.has(original.id)) return context.json({ error: "Analysis is already running for this Testpaq." }, 409);
+    if (original.updatedAt !== request.updatedAt)
+      return context.json({ error: "The Testpaq changed. Save or reload before drafting cases.", code: "analysis_conflict" }, 409);
+    if (request.model !== selectedModel)
+      return context.json({ error: "The selected model changed. Reopen the draft dialog.", code: "model_conflict" }, 409);
+    const parent = original.scenarios.find((value) => value.id === request.scenarioId);
+    if (!parent || parent.review !== "accepted" || parent.archived || parent.scopeReviewRequired)
+      return context.json({ error: "Choose accepted, current coverage before drafting cases." }, 400);
+    const currentProvider = provider;
+    if (!currentProvider?.generateCases)
+      return context.json({ error: "Connect OpenAI to draft test cases. Manual case creation remains available." }, 503);
+    const input = CaseGenerationInputSchema.parse({
+      testpaqId: original.id,
+      model: selectedModel,
+      scenarioId: parent.id,
+      ticket: original.ticket,
+      requirements: original.requirements.filter((value) => parent.requirementIds.includes(value.id)),
+      questions: original.questions,
+      scenarios: [parent],
+      testCases: (original.testCases ?? []).filter((value) => value.scenarioId === parent.id),
+    });
+    const run = options.store.startRun({
+      testpaqId: original.id,
+      provider: currentProvider.name,
+      model: currentProvider.model,
+      promptVersion: "testpaq-test-cases-v1",
+      disclosure: `Draft cases for ${parent.title}: ticket fields, ${input.requirements.length} linked requirements, ${input.questions?.length ?? 0} questions/answers, one coverage output and ${input.testCases.length} existing linked cases`,
+      inputHash: createHash("sha256").update(JSON.stringify(input)).digest("hex"),
+      inputSnapshot: input,
+    });
+    activeAnalyses.add(original.id);
+    try {
+      const signal = options.shutdownSignal ? AbortSignal.any([context.req.raw.signal, options.shutdownSignal]) : context.req.raw.signal;
+      const result = CaseGenerationResultSchema.parse(await currentProvider.generateCases(input, signal));
+      if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
+      const latest = options.store.get(original.id);
+      if (!latest || latest.updatedAt !== original.updatedAt) {
+        options.store.failRun(run.id, "analysis_conflict");
+        return context.json({ error: "The Testpaq changed during drafting. No cases were applied.", code: "analysis_conflict" }, 409);
+      }
+      const completed = options.store.database.transaction(() => {
+        const item = applyGeneratedCases(latest, parent.id, result, run.id);
+        const runRecord = options.store.finishRun(run.id, result);
+        options.store.save(item);
+        return { item, run: runRecord };
+      })();
+      if (provider === currentProvider)
+        providerStatus = {
+          status: "ready",
+          message: "API access verified by successful case drafting.",
+          checkedAt: new Date().toISOString(),
+          billingUrl: BILLING_URL,
+        };
+      return context.json(completed);
+    } catch (error) {
+      if (context.req.raw.signal.aborted || options.shutdownSignal?.aborted || (error instanceof Error && error.name === "AbortError")) {
+        options.store.failRun(run.id, "cancelled");
+        return context.json({ error: "Case drafting cancelled.", runId: run.id }, 409);
+      }
+      const detail = providerError(error);
+      options.store.failRun(run.id, detail.code);
+      if (provider === currentProvider && detail.code !== "invalid_analysis") providerStatus = { status: "error", ...detail };
+      return context.json({ error: detail.message, code: detail.code, billingUrl: detail.billingUrl, runId: run.id }, 502);
+    } finally {
+      activeAnalyses.delete(original.id);
+    }
+  });
+
   app.post("/api/analyse", async (context) => {
     const input = AnalysisInputSchema.parse(await context.req.json());
     const original = options.store.get(input.testpaqId);

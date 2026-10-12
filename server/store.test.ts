@@ -57,7 +57,7 @@ it("upgrades a v0.1 database without altering Testpaqs or analysis snapshots", (
     old.close();
     const migrated = new TestpaqStore(path);
     try {
-      expect(migrated.database.pragma("user_version", { simple: true })).toBe(4);
+      expect(migrated.database.pragma("user_version", { simple: true })).toBe(5);
       expect(migrated.get(fixture.id)).toEqual(fixture);
       expect(migrated.listGroups()).toEqual([]);
       expect(migrated.getRuns(fixture.id)[0]).toMatchObject({ errorCode: "interrupted", status: "failed", inputSnapshot });

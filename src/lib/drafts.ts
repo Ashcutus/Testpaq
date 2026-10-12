@@ -1,3 +1,4 @@
+import { testCaseContentSignature } from "../shared/test-cases";
 import { TestpaqSchema, type Testpaq } from "../shared/domain";
 
 export type LocalDraft = { base: Testpaq; draft: Testpaq };
@@ -25,6 +26,16 @@ export function readDraft(id: string): LocalDraft | undefined {
         title: value.title.trim() || "Untitled scenario",
         expectedOutcome: value.expectedOutcome.trim() || "Expected outcome",
       })),
+      testCases: draft.testCases?.map((value) => ({
+        ...value,
+        title: value.title.trim() || "Untitled test case",
+        objective: value.objective.trim() || "Test objective",
+        steps: value.steps.map((step) => ({
+          ...step,
+          action: step.action.trim() || "Action",
+          expectedResult: step.expectedResult.trim() || "Expected result",
+        })),
+      })),
       questions: draft.questions.map((value) => ({ ...value, text: value.text.trim() || "Untitled question" })),
     });
     if (draft.id !== id || envelope.base.id !== id) return;
@@ -39,6 +50,11 @@ export function mergeDraft(base: Testpaq, local: Testpaq, remote: Testpaq): { it
   const conflicts: string[] = [];
   const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const merge = (before: unknown, ours: unknown, theirs: unknown, path: string): unknown => {
+    if (path === "testCases") {
+      before ??= [];
+      ours ??= [];
+      theirs ??= [];
+    }
     if (equal(ours, before)) return theirs;
     if (equal(theirs, before) || equal(ours, theirs)) return ours;
     if (
@@ -82,6 +98,11 @@ export function mergeDraft(base: Testpaq, local: Testpaq, remote: Testpaq): { it
     return ours;
   };
   const item = merge(base, local, remote, "") as Testpaq;
+  for (const value of item.testCases ?? []) {
+    const saved = remote.testCases?.find((candidate) => candidate.id === value.id);
+    if (saved && value.review === "accepted" && testCaseContentSignature(saved) !== testCaseContentSignature(value))
+      value.review = "proposed";
+  }
   item.updatedAt = remote.updatedAt;
   item.createdAt = remote.createdAt;
   return { item, conflicts: conflicts.filter((path) => path !== "updatedAt") };

@@ -32,3 +32,11 @@ The [forensic review](FORENSIC_REVIEW.md) is the historical checkpoint requested
 Validation passed: **72 tests across 16 files**, ESLint, TypeScript, formatting, production build and the Chromium workflow. A fresh `npm audit` reported **zero vulnerabilities**, including development dependencies. Build warnings were limited to a missing optional API key and third-party annotation handling.
 
 Browser and provider tests use synthetic data and a deterministic provider. No real OpenAI generation or actual Qase import was performed; those account-dependent integration checks remain necessary. Model listing is deliberately not a compatibility or billing guarantee. Exact identity matching is not semantic deduplication, and retained reviewed cases require a human scope decision rather than automatic deletion. Pagination reduces list/history loading; it is not a benchmark of unlimited workspace size. Browser checks do not certify comprehensive screen-reader accessibility or all operating systems.
+
+## Linked-case extension within v0.3
+
+Coverage outputs now have independent linked test cases, with manually authored, AI-generated or explicitly converted proposals. Qase exports their reviewed ordered steps, data, conditions and local case/parent IDs; coverage summaries alone are no longer exported as cases. Existing coverage and decisions remain intact. Scope changes, missing details, archived parents/cases and unaccepted proposals prevent CSV inclusion. Draft recovery merges independently added cases and returns merged content changes to Proposed.
+
+Cypress implementation is outside this release. The generic To be automated option only sets Qase's planning status. Additional tests cover generation context/history, malformed-output rollback, concurrent changes, backup/restore, one-to-many review, stale scope, legacy conversion, multi-step quoting and draft recovery. Browser verification includes the linked-case workflow and completed/mobile inspection. The original forensic checkpoint remains historical.
+
+Linked-case validation: **84 tests across 19 files**, including retained original regression coverage. Lint, TypeScript, build, formatting and the expanded Chromium workflow passed. Live OpenAI and actual Qase account import remain unverified.

@@ -55,6 +55,40 @@ export const ScenarioSchema = z
     }
   });
 
+export const TestStepSchema = z.object({
+  id: z.uuid(),
+  action: z.string().trim().min(1).max(5000),
+  data: z.string().max(3000),
+  expectedResult: z.string().trim().min(1).max(5000),
+});
+export const TestCaseSchema = z
+  .object({
+    id: z.uuid(),
+    scenarioId: z.uuid(),
+    title: z.string().trim().min(1).max(300),
+    objective: z.string().trim().min(1).max(5000),
+    preconditions: z.string().max(5000),
+    postconditions: z.string().max(5000),
+    steps: z.array(TestStepSchema).min(1).max(50),
+    unknowns: z.array(z.string().trim().min(1).max(1000)).max(20),
+    review: ReviewSchema,
+    origin: z.enum(["generated", "human", "legacy"]),
+    destinations: z.object({ manual: z.boolean(), qase: z.boolean(), automation: z.boolean() }),
+    archived: z.boolean().optional(),
+    sourceSignature: z.string().max(2000000),
+    introducedInRun: z.uuid().optional(),
+    editedByHumanAt: z.iso.datetime().optional(),
+    createdAt: z.iso.datetime(),
+    updatedAt: z.iso.datetime(),
+  })
+  .superRefine((value, context) => {
+    if (new Set(value.steps.map((step) => step.id)).size !== value.steps.length)
+      context.addIssue({ code: "custom", path: ["steps"], message: "Duplicate step IDs." });
+    if (value.review === "accepted" && value.unknowns.length)
+      context.addIssue({ code: "custom", path: ["unknowns"], message: "Resolve missing details before accepting a test case." });
+  });
+export type TestCase = z.infer<typeof TestCaseSchema>;
+
 export const QuestionSchema = z.object({
   id: z.uuid(),
   text: z.string().trim().min(1).max(3000),
@@ -94,6 +128,7 @@ export const TestpaqSchema = z
     ticket: TicketSchema,
     requirements: z.array(RequirementSchema).max(500),
     scenarios: z.array(ScenarioSchema).max(1000),
+    testCases: z.array(TestCaseSchema).max(3000).optional(),
     questions: z.array(QuestionSchema).max(500),
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
@@ -108,6 +143,11 @@ export const TestpaqSchema = z
     for (const [index, scenario] of testpaq.scenarios.entries())
       if (new Set(scenario.requirementIds).size !== scenario.requirementIds.length)
         context.addIssue({ code: "custom", path: ["scenarios", index, "requirementIds"], message: "Duplicate requirement links." });
+    if (new Set((testpaq.testCases ?? []).map((value) => value.id)).size !== (testpaq.testCases ?? []).length)
+      context.addIssue({ code: "custom", path: ["testCases"], message: "Duplicate test case IDs." });
+    for (const [index, value] of (testpaq.testCases ?? []).entries())
+      if (!testpaq.scenarios.some((scenario) => scenario.id === value.scenarioId))
+        context.addIssue({ code: "custom", path: ["testCases", index, "scenarioId"], message: "Unknown parent coverage output." });
     const requirementIds = new Set(testpaq.requirements.map((item) => item.id));
     const scenarioIds = new Set(testpaq.scenarios.map((item) => item.id));
     for (const [index, scenario] of testpaq.scenarios.entries()) {
@@ -134,6 +174,8 @@ export const AnalysisInputSchema = z.object({
   requirements: z.array(RequirementSchema).max(500),
   questions: z.array(QuestionSchema).max(500).optional(),
   scenarios: z.array(ScenarioSchema).max(1000).optional(),
+  testCases: z.array(TestCaseSchema).max(3000).optional(),
+  scenarioId: z.uuid().optional(),
 });
 
 export const AnalysisResultSchema = z
@@ -212,6 +254,38 @@ export const AnalysisResultSchema = z
     }
   });
 
+export const CaseGenerationInputSchema = AnalysisInputSchema.extend({
+  scenarioId: z.uuid(),
+  scenarios: z.array(ScenarioSchema).length(1),
+  testCases: z.array(TestCaseSchema).max(3000),
+});
+export const CaseGenerationResultSchema = z
+  .object({
+    testCases: z
+      .array(
+        z.object({
+          clientId: z.string().trim().min(1).max(100),
+          title: z.string().trim().min(1).max(300),
+          objective: z.string().trim().min(1).max(5000),
+          preconditions: z.string().max(5000),
+          postconditions: z.string().max(5000),
+          steps: z
+            .array(TestStepSchema.omit({ id: true }))
+            .min(1)
+            .max(50),
+          unknowns: z.array(z.string().trim().min(1).max(1000)).max(20),
+        }),
+      )
+      .max(30),
+  })
+  .superRefine((value, context) => {
+    if (new Set(value.testCases.map((item) => item.clientId)).size !== value.testCases.length)
+      context.addIssue({ code: "custom", message: "Duplicate generated test case IDs." });
+  });
+export const AnalysisRunResultSchema = z.union([AnalysisResultSchema, CaseGenerationResultSchema]);
+export type CaseGenerationInput = z.infer<typeof CaseGenerationInputSchema>;
+export type CaseGenerationResult = z.infer<typeof CaseGenerationResultSchema>;
+
 export type Testpaq = z.infer<typeof TestpaqSchema>;
 export type Scenario = z.infer<typeof ScenarioSchema>;
 export type Requirement = z.infer<typeof RequirementSchema>;
@@ -235,7 +309,7 @@ export const AnalysisRunSchema = z.object({
   disclosure: z.string().max(10000),
   inputHash: z.string().max(100),
   inputSnapshot: AnalysisInputSchema.optional(),
-  result: AnalysisResultSchema.optional(),
+  result: AnalysisRunResultSchema.optional(),
   errorCode: z.string().max(100).optional(),
   createdAt: z.iso.datetime(),
   completedAt: z.iso.datetime().optional(),

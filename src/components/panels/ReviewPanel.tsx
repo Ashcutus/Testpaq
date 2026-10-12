@@ -24,10 +24,12 @@ export function ReviewPanel({
   item,
   update,
   readOnly = false,
+  onCases,
 }: {
   item: Testpaq;
   update: (recipe: (item: Testpaq) => Testpaq) => void;
   readOnly?: boolean;
+  onCases?: (id: string) => void;
 }) {
   const [originFilter, setOriginFilter] = useState<Scenario["origin"] | "all">("all");
   const [reviewFilter, setReviewFilter] = useState<Scenario["review"] | "all">("all");
@@ -202,7 +204,7 @@ export function ReviewPanel({
               <option value="all">All destinations</option>
               <option value="manual">Manual</option>
               <option value="qase">Qase CSV</option>
-              <option value="automation">Cypress</option>
+              <option value="automation">To be automated</option>
             </select>
           </label>
           <label className="review-filter">
@@ -294,7 +296,7 @@ export function ReviewPanel({
                 })
               }
             >
-              Cypress
+              To be automated
             </button>
             <button className="bulk-clear" onClick={() => setSelected(new Set())}>
               Clear
@@ -328,6 +330,7 @@ export function ReviewPanel({
             <ScenarioRow
               key={scenario.id}
               readOnly={readOnly}
+              onCases={onCases}
               scenario={scenario}
               item={item}
               requirementNumbers={requirementNumbers}
@@ -360,6 +363,7 @@ export function ReviewPanel({
 }
 
 function ScenarioRow({
+  onCases,
   readOnly,
   scenario,
   item,
@@ -375,6 +379,7 @@ function ScenarioRow({
   mutate,
 }: {
   readOnly: boolean;
+  onCases?: (id: string) => void;
   scenario: Scenario;
   item: Testpaq;
   requirementNumbers: Map<string, number>;
@@ -487,7 +492,7 @@ function ScenarioRow({
           <button
             disabled={readOnly}
             aria-pressed={scenario.destinations.automation}
-            aria-label="Cypress; export to Qase as To be automated"
+            aria-label="To be automated in Qase"
             onClick={() =>
               mutate((value) => {
                 value.destinations.automation = !value.destinations.automation;
@@ -495,7 +500,7 @@ function ScenarioRow({
             }
           >
             <Code2 size={13} />
-            Cypress
+            To be automated
           </button>
         </div>
         <div className="review-actions">
@@ -529,6 +534,12 @@ function ScenarioRow({
       </div>
       {expanded && (
         <div className="scenario-details">
+          {onCases && (
+            <Button variant="secondary" size="sm" onClick={() => onCases(scenario.id)}>
+              Review linked test cases ({(item.testCases ?? []).filter((value) => value.scenarioId === scenario.id).length})
+            </Button>
+          )}
+          <p className="muted">Coverage destinations are defaults for new linked cases. Qase exports only accepted, current test cases.</p>
           {scenario.scopeReviewRequired && (
             <p className="warning-note">
               Accepted coverage may be affected by revised scope. Review its requirements and expected behaviour.

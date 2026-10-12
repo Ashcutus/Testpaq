@@ -6,7 +6,7 @@ import {
   WorkspaceBackupSchema,
   type WorkspaceBackup,
   AnalysisInputSchema,
-  AnalysisResultSchema,
+  AnalysisRunResultSchema,
   TestpaqSchema,
   type AnalysisRun,
   type Testpaq,
@@ -32,8 +32,8 @@ export class TestpaqStore {
       this.database.pragma("foreign_keys = ON");
       this.database.pragma("journal_mode = WAL");
       const version = this.database.pragma("user_version", { simple: true }) as number;
-      if (version > 4) throw new Error("This workspace was created by a newer Testpaq version. Upgrade Testpaq before opening it.");
-      if (existed && version > 0 && version < 4) {
+      if (version > 5) throw new Error("This workspace was created by a newer Testpaq version. Upgrade Testpaq before opening it.");
+      if (existed && version > 0 && version < 5) {
         const backup = `${path}.before-v03-${Date.now()}-${randomUUID()}.backup`;
         this.database.prepare("VACUUM INTO ?").run(backup);
         chmodSync(backup, 0o600);
@@ -116,6 +116,7 @@ export class TestpaqStore {
         this.database.pragma("foreign_keys = ON");
       }
     }
+    if (version < 5) this.database.pragma("user_version = 5");
   }
 
   backup(): WorkspaceBackup {
@@ -256,7 +257,7 @@ export class TestpaqStore {
   }
 
   finishRun(id: string, result: unknown): AnalysisRun {
-    const parsed = AnalysisResultSchema.parse(result);
+    const parsed = AnalysisRunResultSchema.parse(result);
     const completedAt = new Date().toISOString();
     this.database
       .prepare("UPDATE analysis_runs SET status='succeeded', error_code=NULL, result_json=?, completed_at=? WHERE id=?")
@@ -301,7 +302,7 @@ function mapRun(row: Record<string, string | null>): AnalysisRun {
     disclosure: row.disclosure!,
     inputHash: row.input_hash!,
     inputSnapshot: row.input_snapshot_json ? AnalysisInputSchema.parse(JSON.parse(row.input_snapshot_json)) : undefined,
-    result: row.result_json ? AnalysisResultSchema.parse(JSON.parse(row.result_json)) : undefined,
+    result: row.result_json ? AnalysisRunResultSchema.parse(JSON.parse(row.result_json)) : undefined,
     errorCode: row.error_code ?? undefined,
     createdAt: row.created_at!,
     completedAt: row.completed_at ?? undefined,

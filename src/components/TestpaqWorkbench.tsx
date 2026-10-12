@@ -9,6 +9,7 @@ import { analysisSignature } from "../shared/analysis";
 import { renderQaseCsv } from "../shared/qase";
 import { renderMarkdown } from "../shared/export";
 import type { Testpaq, ProjectGroup } from "../shared/domain";
+import { TestCasesPanel } from "./panels/TestCasesPanel";
 import { ExportPanel } from "./panels/ExportPanel";
 import { HistoryPanel } from "./panels/HistoryPanel";
 import { QuestionsPanel } from "./panels/QuestionsPanel";
@@ -17,7 +18,7 @@ import { TicketPanel } from "./panels/TicketPanel";
 import { Button } from "./ui/Button";
 import { Dialog } from "./ui/Dialog";
 
-type Section = "ticket" | "review" | "questions" | "export" | "history";
+type Section = "ticket" | "review" | "questions" | "cases" | "export" | "history";
 
 export function TestpaqWorkbench({ id, config, onConfig }: { id: string; config?: AppConfig; onConfig?: (config: AppConfig) => void }) {
   const [item, setItem] = useState<Testpaq>();
@@ -28,6 +29,8 @@ export function TestpaqWorkbench({ id, config, onConfig }: { id: string; config?
   const [billingUrl, setBillingUrl] = useState<string>();
   const [error, setError] = useState("");
   const [analysisOpen, setAnalysisOpen] = useState(false);
+  const [caseDraftOpen, setCaseDraftOpen] = useState(false);
+  const [caseScenarioId, setCaseScenarioId] = useState<string>();
   const [handoffBusy, setHandoffBusy] = useState(false);
   const [analysing, setAnalysing] = useState(false);
   const [historyVersion, setHistoryVersion] = useState(0);
@@ -287,6 +290,52 @@ export function TestpaqWorkbench({ id, config, onConfig }: { id: string; config?
           .catch(() => undefined);
     }
   };
+  const draftCases = async () => {
+    if (!item || !caseScenarioId || !config) return;
+    setAnalysing(true);
+    setError("");
+    const controller = new AbortController();
+    analysisControllerRef.current = controller;
+    try {
+      await flushSave();
+      const current = itemRef.current!;
+      const { item: refreshed } = await api.draftCases(
+        { testpaqId: current.id, scenarioId: caseScenarioId, updatedAt: current.updatedAt, model: config.model },
+        controller.signal,
+      );
+      if (!mountedRef.current || controller.signal.aborted) return;
+      const added = (refreshed.testCases?.length ?? 0) - (current.testCases?.length ?? 0);
+      itemRef.current = refreshed;
+      savedVersionRef.current = refreshed.updatedAt;
+      baseRef.current = refreshed;
+      savedRevisionRef.current = revisionRef.current;
+      try {
+        clearDraft(refreshed.id);
+      } catch {
+        /* Server copy committed. */
+      }
+      setItem(refreshed);
+      setSaveState("saved");
+      setCaseDraftOpen(false);
+      setSection("cases");
+      setDraftNotice(
+        added
+          ? `${added} proposed test cases added. Review each case before exporting.`
+          : "No additional test cases were added. Existing cases were retained.",
+      );
+    } catch (reason) {
+      if ((reason as Error).name !== "AbortError") setError((reason as Error).message);
+    } finally {
+      analysisControllerRef.current = undefined;
+      setAnalysing(false);
+      setHistoryVersion((value) => value + 1);
+      if (mountedRef.current && onConfig)
+        void api
+          .config()
+          .then(onConfig)
+          .catch(() => undefined);
+    }
+  };
   if (!item || loadedId !== id)
     return (
       <div className="loading-page">
@@ -306,6 +355,7 @@ export function TestpaqWorkbench({ id, config, onConfig }: { id: string; config?
   const tabs: Array<[Section, string, typeof FileInput, number?]> = [
     ["ticket", "Ticket & requirements", FileInput],
     ["review", "Scenario review", ClipboardList, item.scenarios.length],
+    ["cases", "Test cases", ListChecks, item.testCases?.length ?? 0],
     ["questions", "Questions", HelpCircle, openQuestions],
     ["export", "Coverage brief", Download],
     ["history", "Analysis history", Clock3],
@@ -410,7 +460,30 @@ export function TestpaqWorkbench({ id, config, onConfig }: { id: string; config?
               <TicketPanel item={item} update={update} onAnalyse={() => setAnalysisOpen(true)} />
             </fieldset>
           )}
-          {section === "review" && <ReviewPanel item={item} update={update} readOnly={item.status === "completed"} />}
+          {section === "review" && (
+            <ReviewPanel
+              item={item}
+              update={update}
+              readOnly={item.status === "completed"}
+              onCases={(id) => {
+                setCaseScenarioId(id);
+                setSection("cases");
+              }}
+            />
+          )}
+          {section === "cases" && (
+            <TestCasesPanel
+              item={item}
+              update={update}
+              selectedScenarioId={caseScenarioId}
+              onSelect={setCaseScenarioId}
+              onDraft={(id) => {
+                setCaseScenarioId(id);
+                setCaseDraftOpen(true);
+              }}
+              readOnly={item.status === "completed"}
+            />
+          )}
           {section === "questions" && (
             <QuestionsPanel item={item} update={update} onRefresh={() => setAnalysisOpen(true)} readOnly={item.status === "completed"} />
           )}
@@ -426,6 +499,70 @@ export function TestpaqWorkbench({ id, config, onConfig }: { id: string; config?
           {section === "history" && <HistoryPanel testpaqId={item.id} version={historyVersion} />}
         </section>
       </fieldset>
+      <Dialog
+        open={caseDraftOpen}
+        onOpenChange={(open) => {
+          if (!analysing) setCaseDraftOpen(open);
+        }}
+        closeDisabled={analysing}
+        title="Draft linked test cases"
+        description="A separate billable AI request creates proposals for the selected coverage output. Nothing is exported automatically."
+        footer={
+          <>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                if (analysing) analysisControllerRef.current?.abort();
+                else setCaseDraftOpen(false);
+              }}
+            >
+              {analysing ? "Cancel drafting" : "Cancel"}
+            </Button>
+            <Button disabled={analysing || !config?.configured} onClick={() => void draftCases()}>
+              {analysing ? "Drafting cases…" : "Draft test cases"}
+            </Button>
+          </>
+        }
+      >
+        <div className="disclosure">
+          <div>
+            <span>Provider</span>
+            <strong>{config?.provider ?? "OpenAI"}</strong>
+          </div>
+          <div>
+            <span>Model</span>
+            <strong>{config?.model ?? "Not configured"}</strong>
+          </div>
+        </div>
+        <p>
+          Content sent: all ticket fields, the selected coverage output, its linked requirements, current questions/answers and its existing
+          linked test cases. Existing decisions and human edits are retained. No repository or Cypress code is sent or generated.
+        </p>
+        <details className="disclosure-preview" open>
+          <summary>Content preview</summary>
+          <pre className="recovery-preview">
+            {JSON.stringify(
+              {
+                ticket: item.ticket,
+                scenarios: item.scenarios.filter((value) => value.id === caseScenarioId),
+                requirements: item.requirements.filter((value) =>
+                  item.scenarios.find((scenario) => scenario.id === caseScenarioId)?.requirementIds.includes(value.id),
+                ),
+                questions: item.questions,
+                testCases: (item.testCases ?? []).filter((value) => value.scenarioId === caseScenarioId),
+              },
+              null,
+              2,
+            )}
+          </pre>
+        </details>
+        {!config?.configured && <p className="warning-note">Connect OpenAI to draft cases, or add them manually.</p>}
+        {error && (
+          <p className="error-banner" role="alert">
+            {error}
+          </p>
+        )}
+      </Dialog>
       <Dialog
         open={Boolean(recovery)}
         onOpenChange={(open) => {

@@ -1,3 +1,4 @@
+import { eligibleCases } from "./test-cases.js";
 import type { Testpaq } from "./domain.js";
 
 // Qase's native CSV v2 template. Blank case IDs create new cases on import.
@@ -30,18 +31,17 @@ export const QASE_HEADERS = [
   "is_muted",
 ] as const;
 
-export function qaseScenarios(item: Testpaq) {
-  return item.scenarios.filter(
-    (scenario) => scenario.review === "accepted" && !scenario.archived && (scenario.destinations.qase || scenario.destinations.automation),
-  );
+export function qaseCases(item: Testpaq) {
+  return eligibleCases(item).filter((value) => value.destinations.qase || value.destinations.automation);
 }
 
 const quote = (value: string) => `"${value.replaceAll('"', '""')}"`;
 // Qase v2 uses a second quoting layer inside the CSV cell for each step.
-const step = (value: string) => `1. ${quote(value)}`;
+const steps = (values: string[]) => values.map((value, index) => `${index + 1}. ${quote(value)}`).join("\n");
 
 export function renderQaseCsv(item: Testpaq): string {
-  const rows = qaseScenarios(item).map((scenario) => {
+  const rows = qaseCases(item).map((testCase) => {
+    const scenario = item.scenarios.find((value) => value.id === testCase.scenarioId)!;
     const requirements = scenario.requirementIds
       .map((id) => item.requirements.find((requirement) => requirement.id === id))
       .filter((requirement) => requirement !== undefined)
@@ -49,24 +49,31 @@ export function renderQaseCsv(item: Testpaq): string {
     const description = [
       `Testpaq: ${item.title}`,
       item.ticket.reference ? `Ticket: ${item.ticket.reference}` : "",
+      `Coverage output: ${scenario.title}`,
       `Scenario ID: ${scenario.id}`,
+      `Test case ID: ${testCase.id}`,
+      `Test objective: ${testCase.objective}`,
+      `Case origin: ${testCase.origin}`,
       `Origin: ${scenario.origin}`,
       `Category: ${scenario.category}`,
       requirements.length ? `Requirements:\n${requirements.join("\n")}` : "",
       scenario.rationale ? `Rationale: ${scenario.rationale}` : "",
       scenario.risks.length ? `Risks:\n${scenario.risks.map((risk) => `- ${risk}`).join("\n")}` : "",
-      scenario.destinations.automation ? "Automation target: Cypress" : "",
+      testCase.destinations.automation ? "Automation planned; implementation is outside v0.3" : "",
     ]
       .filter(Boolean)
       .join("\n\n");
     const fields: Partial<Record<(typeof QASE_HEADERS)[number], string>> = {
-      title: scenario.title,
+      title: testCase.title,
+      preconditions: testCase.preconditions,
+      postconditions: testCase.postconditions,
       description,
-      automation: scenario.destinations.automation ? "to-be-automated" : "is-not-automated",
+      automation: testCase.destinations.automation ? "to-be-automated" : "is-not-automated",
       status: "actual",
       steps_type: "classic",
-      steps_actions: step(scenario.title),
-      steps_result: step(scenario.expectedOutcome),
+      steps_actions: steps(testCase.steps.map((value) => value.action)),
+      steps_result: steps(testCase.steps.map((value) => value.expectedResult)),
+      steps_data: steps(testCase.steps.map((value) => value.data)),
     };
     return QASE_HEADERS.map((header) => quote(fields[header] ?? "")).join(",");
   });

@@ -8,8 +8,8 @@ AI proposes. Humans decide. A scenario always keeps its historically truthful or
 
 - Flexible OpenAI model selection, explicit account-model loading and saved model preference
 - Explicit Testpaq completion and reopening; completed coverage stays readable and exportable
-- Qase native v2 CSV downloads from accepted Qase/Cypress scenarios, with an inclusion preview
-- Cypress selections import into Qase as **To be automated**; other selected cases import as manual
+- Qase native v2 CSV downloads from reviewed linked test cases, with an inclusion preview
+- Cases marked **To be automated** retain that Qase status; other selected cases import as manual
 
 ## Existing capabilities
 
@@ -137,9 +137,13 @@ Open the OpenAI connection dialog, enter a model ID or use **Load available mode
 
 Use **Mark completed** to record that the Testpaq's QA review and handoff work is complete. This is a human decision, independent of downloads, unresolved questions and test execution. Completed Testpaqs disable editing and analysis while retaining scenario expansion, filters, coverage brief, CSV and history access. **Reopen Testpaq** returns to In review and permits changes. Existing v0.1/v0.2 data, groups and analysis history migrate automatically.
 
-In Scenario review, accept the cases to hand off and select **Qase CSV** or **Cypress**. In Coverage brief, inspect the selected cases and choose **Download Qase CSV**. Only accepted scenarios with either selection are included, once each; manual-only, proposed and rejected scenarios are excluded. Cypress implies inclusion even without the Qase checkbox, and sets `automation=to-be-automated`. Qase-only cases use `is-not-automated`. The existing automation flag is retained, so previous automation candidates become Cypress selections without losing data.
+Scenario review captures coverage intent. Detailed test cases are separate first-class children with one parent scenario, stable case/step IDs, objective, preconditions/postconditions, ordered action/data/result steps, missing details, review status and destination flags. Parent destinations supply defaults for new cases. Existing payloads without testCases remain valid; they are not silently converted or approved.
 
-The file uses the Qase native v2 template (`v2.id`) and its field slugs. In a Qase project repository choose **Import Data → Qase.io**, upload the CSV and choose a parent suite. Blank case IDs let Qase assign new IDs; importing the same file again creates new cases. Titles become one classic step action, expected outcomes become the matching step result, and the description preserves ticket reference, scenario ID, provenance, requirement text, rationale and risks. No additional AI generation is needed. See [Qase CSV formatting](https://docs.qase.io/en/articles/14441496-qase-csv-adding-test-steps) and [automation field values](https://docs.qase.io/en/articles/14423241-qase-csv-test-case-properties).
+In Test cases, add cases manually, explicitly convert a legacy coverage summary into a proposal, or confirm a separate billable AI drafting request. Generated cases start Proposed and retain their run ID. Missing details block acceptance. Editing case content returns it to Proposed. A scope snapshot detects changed ticket fields, parent intent, linked requirements and resolved answers. Acceptance records the reviewed current scope. Archived/rejected parents and cases, proposals, and cases awaiting scope review are excluded from Qase export.
+
+The API uses `/api/test-cases/draft` with saved aggregate version and disclosed model, constructs a selected-scope snapshot server-side and checks for concurrent edits before committing cases and generation history in one transaction. History supports both coverage-analysis and case-generation results. Backups include linked cases and these runs. SQLite user_version 5 prevents earlier builds from opening a workspace containing the new domain data; the payload extension needs no case-table migration.
+
+The Qase CSV uses native v2 (`v2.id`), one record per eligible linked case, with complete ordered actions, results and data. Preconditions/postconditions are included; descriptions preserve ticket, parent/case IDs, provenance, requirements, rationale and risks. Qase or To be automated selections include each case once, mapping to `is-not-automated` or `to-be-automated`. Blank IDs let Qase allocate new IDs; reimporting can create duplicates. CSV generation is deterministic and makes no AI request. See [Qase CSV formatting](https://docs.qase.io/en/articles/14441496-qase-csv-adding-test-steps) and [automation field values](https://docs.qase.io/en/articles/14423241-qase-csv-test-case-properties).
 
 A download prepares a file for manual import; it does not confirm Qase creation or Cypress implementation. Successful browser handoff updates export status after copying or requesting the download; exporting a completed Testpaq preserves Completed. Cypress code generation and direct Qase API writes remain deferred.
 

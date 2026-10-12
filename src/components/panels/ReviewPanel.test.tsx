@@ -22,7 +22,7 @@ describe("scenario review", () => {
   it("labels destinations as candidates and supports unlinked filtering", () => {
     render(<ReviewPanel item={makeFixture()} update={vi.fn()} />);
     expect(screen.getAllByText("Qase CSV").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Cypress").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("To be automated").length).toBeGreaterThan(0);
     fireEvent.change(screen.getByLabelText("Filter by requirement coverage"), { target: { value: "unlinked" } });
     expect(screen.getByText(/shown · Suggestions remain proposals/)).toBeInTheDocument();
   });

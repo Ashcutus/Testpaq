@@ -9,7 +9,7 @@ describe("Markdown export", () => {
     const second = renderMarkdown(fixture);
     expect(first).toBe(second);
     expect(first).toContain("Qase CSV");
-    expect(first).toContain("Cypress");
+    expect(first).toContain("To be automated in Qase");
     expect(first).not.toContain("exists in Qase");
     expect(first).toContain("## Uncovered requirements");
     expect(first).toContain("A help article must explain");

@@ -1639,3 +1639,85 @@ button:disabled {
   padding: 10px;
   border-bottom: 1px solid var(--border);
 }
+
+.test-case-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  margin-top: 18px;
+}
+.test-case-card > summary {
+  cursor: pointer;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.test-case-content {
+  padding: 0 18px 18px;
+}
+.case-fields {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+.case-fields > .field,
+.case-fields > .detail-grid {
+  margin-top: 16px;
+}
+.test-step {
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.test-step .field {
+  margin-top: 12px;
+}
+.case-destinations {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+.case-destinations label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.case-unknown {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+.test-cases-panel .detail-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.test-cases-panel .button-group,
+.test-step .content-heading {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.test-case-card > summary::before {
+  content: "›";
+  font-size: 18px;
+}
+.test-case-card[open] > summary::before {
+  transform: rotate(90deg);
+}
+@media (max-width: 620px) {
+  .test-cases-panel .detail-grid {
+    grid-template-columns: 1fr;
+  }
+  .test-case-content {
+    padding: 0 12px 12px;
+  }
+  .test-step {
+    padding: 12px;
+  }
+  .case-unknown {
+    flex-wrap: wrap;
+  }
+}
