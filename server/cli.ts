@@ -26,7 +26,14 @@ if (!Number.isInteger(requestedPort) || requestedPort < 0 || requestedPort > 655
 const isDev = Boolean(process.env.TESTPAQ_DEV_ORIGIN);
 const sessionToken = process.env.TESTPAQ_SESSION_TOKEN || randomBytes(32).toString("base64url");
 const dataDir = process.env.TESTPAQ_DATA_DIR || defaultDataDirectory();
-const store = new TestpaqStore(join(dataDir, "testpaq.db"));
+let store: TestpaqStore;
+try {
+  store = new TestpaqStore(join(dataDir, "testpaq.db"));
+} catch (error) {
+  console.error(`Could not open the workspace: ${(error as Error).message}`);
+  process.exit(1);
+}
+const shutdownController = new AbortController();
 const provider = process.env.OPENAI_API_KEY?.trim()
   ? new OpenAIAnalysisProvider(process.env.OPENAI_API_KEY!.trim(), process.env.TESTPAQ_OPENAI_MODEL)
   : undefined;
@@ -35,6 +42,7 @@ const distDir = resolve(currentDirectory, "../../dist");
 
 if (!isDev && !existsSync(join(distDir, "index.html"))) {
   console.error("Testpaq UI is not built. Run `npm run build` first.");
+  store.close();
   process.exit(1);
 }
 
@@ -42,6 +50,7 @@ const server = serve({
   fetch: createApp({
     store,
     provider,
+    shutdownSignal: shutdownController.signal,
     sessionToken,
     allowedOrigin: process.env.TESTPAQ_DEV_ORIGIN || "self",
     distDir: isDev ? undefined : distDir,
@@ -61,7 +70,26 @@ server.on("listening", async () => {
   if (!noOpen) await open(url).catch(() => console.warn("Could not open the browser. Open the URL above manually."));
 });
 
+server.on("error", (error: NodeJS.ErrnoException) => {
+  console.error(
+    error.code === "EADDRINUSE"
+      ? `Port ${requestedPort} is already in use. Choose another --port or omit it.`
+      : `Could not start the local server (${error.code || error.name}).`,
+  );
+  store.close();
+  process.exit(1);
+});
+let stopping = false;
 const shutdown = () => {
+  if (stopping) return;
+  stopping = true;
+  shutdownController.abort();
+  const timer = setTimeout(() => {
+    if ("closeAllConnections" in server) server.closeAllConnections();
+    store.close();
+    process.exit(0);
+  }, 5000);
+  timer.unref();
   server.close(() => {
     store.close();
     process.exit(0);

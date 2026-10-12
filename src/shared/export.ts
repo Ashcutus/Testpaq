@@ -5,7 +5,7 @@ const safe = (value: string) => value.replaceAll("\r", "").trim();
 
 export function renderMarkdown(testpaq: Testpaq, includeRejected = false): string {
   const requirementNumbers = activeRequirementNumbers(testpaq);
-  const accepted = testpaq.scenarios.filter((scenario) => scenario.review === "accepted");
+  const accepted = testpaq.scenarios.filter((scenario) => scenario.review === "accepted" && !scenario.archived);
   const rejected = testpaq.scenarios.filter((scenario) => scenario.review === "rejected");
   const covered = new Set(accepted.flatMap((scenario) => scenario.requirementIds));
   const uncovered = testpaq.requirements.filter((requirement) => requirement.active && !covered.has(requirement.id));
@@ -38,7 +38,7 @@ export function renderMarkdown(testpaq: Testpaq, includeRejected = false): strin
             .filter((value): value is number => value !== undefined);
           const destinations = Object.entries(scenario.destinations)
             .filter(([, active]) => active)
-            .map(([name]) => (name === "qase" ? "Qase candidate" : name === "automation" ? "Automation candidate" : "Manual"));
+            .map(([name]) => (name === "qase" ? "Qase CSV" : name === "automation" ? "Cypress (to be automated in Qase)" : "Manual"));
           return [
             `### ${index + 1}. ${safe(scenario.title)}`,
             "",
@@ -81,5 +81,10 @@ export function renderMarkdown(testpaq: Testpaq, includeRejected = false): strin
 }
 
 export function activeRequirementNumbers(testpaq: Testpaq): Map<string, number> {
-  return new Map(testpaq.requirements.filter((requirement) => requirement.active).map((requirement, index) => [requirement.id, index + 1]));
+  return new Map(
+    testpaq.requirements
+      .map((requirement, index) => [requirement, index + 1] as const)
+      .filter(([requirement]) => requirement.active)
+      .map(([requirement, number]) => [requirement.id, number]),
+  );
 }

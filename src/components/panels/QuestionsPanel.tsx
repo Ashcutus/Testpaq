@@ -10,10 +10,12 @@ export function QuestionsPanel({
   item,
   update,
   onRefresh,
+  readOnly = false,
 }: {
   item: Testpaq;
   update: (recipe: (item: Testpaq) => Testpaq) => void;
   onRefresh?: () => void;
+  readOnly?: boolean;
 }) {
   const [refreshOpen, setRefreshOpen] = useState(false);
   const requirementNumbers = activeRequirementNumbers(item);
@@ -51,7 +53,7 @@ export function QuestionsPanel({
           <h2>Questions</h2>
           <p>Keep unknowns visible. Resolving a question never silently creates a requirement.</p>
         </div>
-        <Button icon={<Plus size={16} />} onClick={add}>
+        <Button disabled={readOnly} icon={<Plus size={16} />} onClick={add}>
           Add question
         </Button>
       </div>
@@ -83,8 +85,10 @@ export function QuestionsPanel({
                 </span>
               </div>
               <textarea
+                readOnly={readOnly}
                 rows={2}
                 maxLength={3000}
+                aria-invalid={!question.text.trim()}
                 aria-label="Question"
                 value={question.text}
                 onChange={(event) =>
@@ -94,9 +98,11 @@ export function QuestionsPanel({
                   })
                 }
               />
+              {!question.text.trim() && <span className="attention">Question text is required before saving.</span>}
               <label className="field">
                 <span>Answer</span>
                 <textarea
+                  readOnly={readOnly}
                   rows={3}
                   maxLength={3000}
                   aria-label={`Answer to: ${question.text}`}
@@ -119,17 +125,17 @@ export function QuestionsPanel({
             <div className="question-actions">
               {question.status === "open" ? (
                 <>
-                  <button disabled={!question.resolution?.trim()} onClick={() => setStatus(question.id, "resolved")}>
+                  <button disabled={readOnly || !question.resolution?.trim()} onClick={() => setStatus(question.id, "resolved")}>
                     <CheckCircle2 size={15} />
                     Save answer
                   </button>
-                  <button onClick={() => setStatus(question.id, "dismissed")}>
+                  <button disabled={readOnly} onClick={() => setStatus(question.id, "dismissed")}>
                     <CircleSlash2 size={15} />
                     Dismiss
                   </button>
                 </>
               ) : (
-                <button onClick={() => setStatus(question.id, "open")}>
+                <button disabled={readOnly} onClick={() => setStatus(question.id, "open")}>
                   <RotateCcw size={15} />
                   Reopen
                 </button>

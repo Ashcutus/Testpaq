@@ -5,6 +5,8 @@ import { formatRelative, label } from "../../lib/utils";
 import type { AnalysisRun } from "../../shared/domain";
 
 export function HistoryPanel({ testpaqId, version }: { testpaqId: string; version: number }) {
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
   const [runs, setRuns] = useState<AnalysisRun[]>([]);
   useEffect(() => {
@@ -14,6 +16,7 @@ export function HistoryPanel({ testpaqId, version }: { testpaqId: string; versio
       .then((runs) => {
         if (active) {
           setRuns(runs);
+          setHasMore(runs.length === 100);
           setError("");
         }
       })
@@ -24,6 +27,18 @@ export function HistoryPanel({ testpaqId, version }: { testpaqId: string; versio
       active = false;
     };
   }, [testpaqId, version]);
+  const loadMore = async () => {
+    setLoadingMore(true);
+    try {
+      const more = await api.history(testpaqId, runs.length);
+      setRuns((previous) => [...previous, ...more]);
+      setHasMore(more.length === 100);
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
   return (
     <div className="panel-stack">
       <div className="content-heading">
@@ -115,6 +130,11 @@ export function HistoryPanel({ testpaqId, version }: { testpaqId: string; versio
           </div>
         )}
       </div>
+      {hasMore && (
+        <button className="button button-secondary" disabled={loadingMore} onClick={() => void loadMore()}>
+          Load more history
+        </button>
+      )}
     </div>
   );
 }

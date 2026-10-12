@@ -20,24 +20,38 @@ import type { Scenario, Testpaq } from "../../shared/domain";
 import { activeRequirementNumbers } from "../../shared/export";
 import { Button } from "../ui/Button";
 
-export function ReviewPanel({ item, update }: { item: Testpaq; update: (recipe: (item: Testpaq) => Testpaq) => void }) {
+export function ReviewPanel({
+  item,
+  update,
+  readOnly = false,
+}: {
+  item: Testpaq;
+  update: (recipe: (item: Testpaq) => Testpaq) => void;
+  readOnly?: boolean;
+}) {
   const [originFilter, setOriginFilter] = useState<Scenario["origin"] | "all">("all");
   const [reviewFilter, setReviewFilter] = useState<Scenario["review"] | "all">("all");
   const [coverageFilter, setCoverageFilter] = useState<"all" | "unlinked">("all");
   const [categoryFilter, setCategoryFilter] = useState<Scenario["category"] | "all">("all");
   const [destinationFilter, setDestinationFilter] = useState<"all" | "manual" | "qase" | "automation">("all");
   const [riskOnly, setRiskOnly] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [focusedId, setFocusedId] = useState<string>();
   const [expanded, setExpanded] = useState<string>();
-  const [undo, setUndo] = useState<Testpaq>();
+  const [undo, setUndo] = useState<{ before: Scenario[]; after: Map<string, string> }>();
+  const canUndo =
+    !readOnly &&
+    undo &&
+    undo.before.every((value) => JSON.stringify(item.scenarios.find((scenario) => scenario.id === value.id)) === undo.after.get(value.id));
   const rowRefs = useRef(new Map<string, HTMLElement>());
   const requirementNumbers = activeRequirementNumbers(item);
   const visible = useMemo(
     () =>
       item.scenarios.filter(
         (scenario) =>
+          (showArchived || !scenario.archived) &&
           (originFilter === "all" || scenario.origin === originFilter) &&
           (reviewFilter === "all" || scenario.review === reviewFilter) &&
           (coverageFilter === "all" || scenario.requirementIds.length === 0) &&
@@ -46,17 +60,22 @@ export function ReviewPanel({ item, update }: { item: Testpaq; update: (recipe: 
           (!riskOnly || scenario.risks.length > 0) &&
           `${scenario.title} ${scenario.expectedOutcome}`.toLowerCase().includes(query.toLowerCase()),
       ),
-    [item.scenarios, originFilter, reviewFilter, coverageFilter, categoryFilter, destinationFilter, riskOnly, query],
+    [item.scenarios, showArchived, originFilter, reviewFilter, coverageFilter, categoryFilter, destinationFilter, riskOnly, query],
   );
 
   const mutate = (ids: string[], recipe: (scenario: Scenario) => void) => {
-    setUndo(structuredClone(item));
+    if (readOnly) return;
+    const before = structuredClone(item.scenarios.filter((scenario) => ids.includes(scenario.id)));
     update((draft) => {
       for (const scenario of draft.scenarios)
         if (ids.includes(scenario.id)) {
           recipe(scenario);
           scenario.updatedAt = new Date().toISOString();
         }
+      setUndo({
+        before,
+        after: new Map(draft.scenarios.filter((value) => ids.includes(value.id)).map((value) => [value.id, JSON.stringify(value)])),
+      });
       return draft;
     });
   };
@@ -78,7 +97,7 @@ export function ReviewPanel({ item, update }: { item: Testpaq; update: (recipe: 
         }
         return;
       }
-      if (!activeIds.length) return;
+      if (!activeIds.length || readOnly) return;
       const key = event.key.toLowerCase();
       if (key === "a")
         mutate(activeIds, (scenario) => {
@@ -156,7 +175,7 @@ export function ReviewPanel({ item, update }: { item: Testpaq; update: (recipe: 
             <h2>Scenarios</h2>
             <p>{visible.length} shown · Suggestions remain proposals until you decide.</p>
           </div>
-          <Button icon={<Plus size={16} />} onClick={addScenario}>
+          <Button disabled={readOnly} icon={<Plus size={16} />} onClick={addScenario}>
             Add scenario
           </Button>
         </div>
@@ -182,8 +201,8 @@ export function ReviewPanel({ item, update }: { item: Testpaq; update: (recipe: 
             <select value={destinationFilter} onChange={(event) => setDestinationFilter(event.target.value as typeof destinationFilter)}>
               <option value="all">All destinations</option>
               <option value="manual">Manual</option>
-              <option value="qase">Qase candidate</option>
-              <option value="automation">Automation candidate</option>
+              <option value="qase">Qase CSV</option>
+              <option value="automation">Cypress</option>
             </select>
           </label>
           <label className="review-filter">
@@ -227,7 +246,7 @@ export function ReviewPanel({ item, update }: { item: Testpaq; update: (recipe: 
             </span>
           </div>
         </div>
-        {selected.size > 0 && (
+        {selected.size > 0 && !readOnly && (
           <div className="bulkbar">
             <strong>{selected.size} selected</strong>
             <button
@@ -266,7 +285,7 @@ export function ReviewPanel({ item, update }: { item: Testpaq; update: (recipe: 
                 })
               }
             >
-              Qase candidate
+              Qase CSV
             </button>
             <button
               onClick={() =>
@@ -275,29 +294,40 @@ export function ReviewPanel({ item, update }: { item: Testpaq; update: (recipe: 
                 })
               }
             >
-              Automation candidate
+              Cypress
             </button>
             <button className="bulk-clear" onClick={() => setSelected(new Set())}>
               Clear
             </button>
           </div>
         )}
-        {undo && (
+        {canUndo && undo && (
           <button
             className="undo-toast"
             onClick={() => {
               const snapshot = undo;
               setUndo(undefined);
-              update(() => snapshot);
+              update((draft) => {
+                for (const before of snapshot.before) {
+                  const index = draft.scenarios.findIndex((value) => value.id === before.id);
+                  draft.scenarios[index] = structuredClone(before);
+                }
+                return draft;
+              });
             }}
           >
             Action applied · Undo
           </button>
         )}
+        <label>
+          <input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} /> Show archived
+          scenarios
+        </label>
         <div className="scenario-list" role="list" aria-label="Scenarios">
           {visible.map((scenario) => (
             <ScenarioRow
               key={scenario.id}
+              readOnly={readOnly}
               scenario={scenario}
               item={item}
               requirementNumbers={requirementNumbers}
@@ -330,6 +360,7 @@ export function ReviewPanel({ item, update }: { item: Testpaq; update: (recipe: 
 }
 
 function ScenarioRow({
+  readOnly,
   scenario,
   item,
   requirementNumbers,
@@ -343,6 +374,7 @@ function ScenarioRow({
   update,
   mutate,
 }: {
+  readOnly: boolean;
   scenario: Scenario;
   item: Testpaq;
   requirementNumbers: Map<string, number>;
@@ -417,6 +449,8 @@ function ScenarioRow({
             ) : (
               <span>Additional coverage</span>
             )}
+            {scenario.archived && <span>Archived</span>}
+            {scenario.scopeReviewRequired && <span className="risk">Review revised scope</span>}
             {scenario.risks.length > 0 && (
               <span className="risk">
                 <AlertTriangle size={12} /> Risk
@@ -426,6 +460,7 @@ function ScenarioRow({
         </div>
         <div className="destinations">
           <button
+            disabled={readOnly}
             aria-pressed={scenario.destinations.manual}
             onClick={() =>
               mutate((value) => {
@@ -437,8 +472,9 @@ function ScenarioRow({
             Manual
           </button>
           <button
+            disabled={readOnly}
             aria-pressed={scenario.destinations.qase}
-            aria-label="Qase candidate; not yet created"
+            aria-label="Include in Qase CSV"
             onClick={() =>
               mutate((value) => {
                 value.destinations.qase = !value.destinations.qase;
@@ -446,11 +482,12 @@ function ScenarioRow({
             }
           >
             <Circle size={13} />
-            Qase candidate
+            Qase CSV
           </button>
           <button
+            disabled={readOnly}
             aria-pressed={scenario.destinations.automation}
-            aria-label="Automation candidate; not yet automated"
+            aria-label="Cypress; export to Qase as To be automated"
             onClick={() =>
               mutate((value) => {
                 value.destinations.automation = !value.destinations.automation;
@@ -458,12 +495,13 @@ function ScenarioRow({
             }
           >
             <Code2 size={13} />
-            Automation candidate
+            Cypress
           </button>
         </div>
         <div className="review-actions">
           <button
             className="accept"
+            disabled={readOnly}
             aria-pressed={scenario.review === "accepted"}
             aria-label="Accept scenario"
             onClick={() =>
@@ -476,6 +514,7 @@ function ScenarioRow({
           </button>
           <button
             className="reject"
+            disabled={readOnly}
             aria-pressed={scenario.review === "rejected"}
             aria-label="Reject scenario"
             onClick={() =>
@@ -490,9 +529,51 @@ function ScenarioRow({
       </div>
       {expanded && (
         <div className="scenario-details">
+          {scenario.scopeReviewRequired && (
+            <p className="warning-note">
+              Accepted coverage may be affected by revised scope. Review its requirements and expected behaviour.
+            </p>
+          )}
+          <div className="button-group">
+            {scenario.scopeReviewRequired && (
+              <Button
+                disabled={readOnly}
+                variant="secondary"
+                size="sm"
+                onClick={() =>
+                  patch((value) => {
+                    value.scopeReviewRequired = false;
+                  })
+                }
+              >
+                Reviewed current scope
+              </Button>
+            )}
+            <Button
+              disabled={readOnly}
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                mutate((value) => {
+                  value.archived = !value.archived;
+                })
+              }
+            >
+              {scenario.archived ? "Restore scenario" : "Archive scenario"}
+            </Button>
+          </div>
+          {(scenario.introducedInRun || scenario.lastChangedInRun) && (
+            <p className="privacy-note">
+              Introduced in analysis {scenario.introducedInRun?.slice(0, 8) ?? "before run tracking"}; last changed in{" "}
+              {scenario.lastChangedInRun?.slice(0, 8) ?? "before run tracking"}.
+            </p>
+          )}
           <label className="field">
             <span>Scenario title</span>
             <input
+              readOnly={readOnly}
+              maxLength={300}
+              aria-invalid={!scenario.title.trim()}
               value={scenario.title}
               onChange={(event) =>
                 patch((value) => {
@@ -505,6 +586,9 @@ function ScenarioRow({
             <span>Expected behaviour</span>
             <textarea
               rows={3}
+              readOnly={readOnly}
+              maxLength={5000}
+              aria-invalid={!scenario.expectedOutcome.trim()}
               value={scenario.expectedOutcome}
               onChange={(event) =>
                 patch((value) => {
@@ -513,10 +597,14 @@ function ScenarioRow({
               }
             />
           </label>
+          {(!scenario.title.trim() || !scenario.expectedOutcome.trim()) && (
+            <p className="attention">A scenario needs a title and expected behaviour before it can be saved.</p>
+          )}
           <div className="detail-grid">
             <label className="field">
               <span>Category</span>
               <select
+                disabled={readOnly}
                 value={scenario.category}
                 onChange={(event) =>
                   patch((value) => {
@@ -552,9 +640,10 @@ function ScenarioRow({
                       type="checkbox"
                       checked={scenario.requirementIds.includes(requirement.id)}
                       disabled={
-                        scenario.origin === "explicit" &&
-                        scenario.requirementIds.length === 1 &&
-                        scenario.requirementIds.includes(requirement.id)
+                        readOnly ||
+                        (scenario.origin === "explicit" &&
+                          scenario.requirementIds.length === 1 &&
+                          scenario.requirementIds.includes(requirement.id))
                       }
                       onChange={(event) =>
                         patch((value) => {
@@ -592,7 +681,9 @@ function ScenarioRow({
 
 function uncoveredCount(item: Testpaq) {
   const covered = new Set(
-    item.scenarios.filter((scenario) => scenario.review === "accepted").flatMap((scenario) => scenario.requirementIds),
+    item.scenarios
+      .filter((scenario) => scenario.review === "accepted" && !scenario.archived)
+      .flatMap((scenario) => scenario.requirementIds),
   );
   return item.requirements.filter((requirement) => requirement.active && !covered.has(requirement.id)).length;
 }

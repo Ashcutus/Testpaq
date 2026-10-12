@@ -21,7 +21,11 @@ export function providerError(error: unknown) {
     };
   }
   if (value?.status === 401)
-    return { code: "invalid_api_key", message: "OpenAI rejected the API key. Update OPENAI_API_KEY in .env and restart Testpaq." };
+    return {
+      code: "invalid_api_key",
+      message:
+        "OpenAI rejected the API key. Link a replacement key in OpenAI settings, or update OPENAI_API_KEY in .env and restart Testpaq.",
+    };
   if (value?.status === 403)
     return {
       code: "permission_denied",
@@ -30,7 +34,8 @@ export function providerError(error: unknown) {
   if (value?.status === 404)
     return {
       code: "model_unavailable",
-      message: "The configured OpenAI model is unavailable to this key. Check TESTPAQ_OPENAI_MODEL and model access.",
+      message:
+        "The configured OpenAI model is unavailable to this key. Choose an available analysis model in OpenAI settings and check model access.",
     };
   if (value?.status === 429) return { code: "rate_limited", message: "OpenAI's request rate limit was reached. Wait briefly and retry." };
   if (value?.name === "APIConnectionTimeoutError")

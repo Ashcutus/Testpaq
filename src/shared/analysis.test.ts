@@ -70,3 +70,33 @@ describe("analysis refresh", () => {
     expect(item.lastAnalysedSignature).not.toBe(analysisSignature(item));
   });
 });
+
+it("flags accepted scope changes and reports refresh changes without erasing decisions", () => {
+  const initial = applyAnalysis(makeFixture(), { requirements: [], scenarios: [], questions: [] });
+  initial.ticket.description += " Revised product scope";
+  const refreshed = applyAnalysis(initial, { requirements: [], scenarios: [], questions: [] });
+  expect(refreshed.scenarios.filter((value) => value.review === "accepted").every((value) => value.scopeReviewRequired)).toBe(true);
+  expect(refreshed.lastRefresh?.affected.length).toBeGreaterThan(0);
+});
+
+it("does not collapse different cases sharing the same title", () => {
+  const item = makeFixture();
+  item.scenarios = [];
+  item.questions = [];
+  const scenario = {
+    clientId: "first",
+    rationale: undefined,
+    title: "Login",
+    expectedOutcome: "Valid credentials succeed",
+    origin: "inferred" as const,
+    category: "happy_path" as const,
+    requirementClientIds: [],
+    risks: [],
+  };
+  const refreshed = applyAnalysis(item, {
+    requirements: [],
+    scenarios: [scenario, { ...scenario, clientId: "second", expectedOutcome: "Invalid credentials fail" }],
+    questions: [],
+  });
+  expect(refreshed.scenarios).toHaveLength(2);
+});

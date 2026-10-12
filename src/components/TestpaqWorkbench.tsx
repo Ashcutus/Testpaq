@@ -2,8 +2,11 @@ import { AlertCircle, Check, ClipboardList, Clock3, Download, FileInput, HelpCir
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AppConfig } from "../App";
 import { api, ApiError } from "../lib/api";
+import { clearDraft, mergeDraft, readDraft, writeDraft } from "../lib/drafts";
+import { TestpaqSchema } from "../shared/domain";
 import { label } from "../lib/utils";
 import { analysisSignature } from "../shared/analysis";
+import { renderQaseCsv } from "../shared/qase";
 import { renderMarkdown } from "../shared/export";
 import type { Testpaq, ProjectGroup } from "../shared/domain";
 import { ExportPanel } from "./panels/ExportPanel";
@@ -25,8 +28,12 @@ export function TestpaqWorkbench({ id, config, onConfig }: { id: string; config?
   const [billingUrl, setBillingUrl] = useState<string>();
   const [error, setError] = useState("");
   const [analysisOpen, setAnalysisOpen] = useState(false);
+  const [handoffBusy, setHandoffBusy] = useState(false);
   const [analysing, setAnalysing] = useState(false);
   const [historyVersion, setHistoryVersion] = useState(0);
+  const [recovery, setRecovery] = useState<{ local: Testpaq; remote: Testpaq; merged: Testpaq; conflicts: string[] }>();
+  const [draftNotice, setDraftNotice] = useState("");
+  const baseRef = useRef<Testpaq | undefined>(undefined);
   const [revision, setRevision] = useState(0);
   const savedVersionRef = useRef<string | undefined>(undefined);
   const itemRef = useRef<Testpaq | undefined>(undefined);
@@ -42,12 +49,20 @@ export function TestpaqWorkbench({ id, config, onConfig }: { id: string; config?
     const targetRevision = revisionRef.current;
     if (!snapshot || targetRevision <= savedRevisionRef.current) return snapshot;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    const validation = TestpaqSchema.safeParse(snapshot);
+    if (!validation.success) {
+      const details = validation.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
+      setSaveState("error");
+      setError(`Fix these draft fields before saving: ${details}`);
+      throw new Error(details);
+    }
     setSaveState("saving");
     const save = saveChainRef.current
       .catch(() => undefined)
       .then(async () => {
         const saved = await api.save({ ...snapshot, updatedAt: savedVersionRef.current || snapshot.updatedAt }, keepalive);
         savedVersionRef.current = saved.updatedAt;
+        baseRef.current = saved;
         return saved;
       });
     saveChainRef.current = save.then(
@@ -63,6 +78,11 @@ export function TestpaqWorkbench({ id, config, onConfig }: { id: string; config?
         if (mountedRef.current) {
           setItem(saved);
           setSaveState("saved");
+          try {
+            clearDraft(saved.id);
+          } catch {
+            /* The saved server copy is authoritative. */
+          }
         }
       }
       return saved;
@@ -70,6 +90,17 @@ export function TestpaqWorkbench({ id, config, onConfig }: { id: string; config?
       if (mountedRef.current) {
         setSaveState("error");
         setError((reason as Error).message);
+        if (reason instanceof ApiError && reason.code === "save_conflict" && baseRef.current && itemRef.current) {
+          const local = structuredClone(itemRef.current);
+          const base = baseRef.current;
+          try {
+            const remote = await api.get(local.id);
+            const merged = mergeDraft(base, local, remote);
+            setRecovery({ local, remote, merged: merged.item, conflicts: merged.conflicts });
+          } catch {
+            /* Keep the local draft if comparison cannot be loaded. */
+          }
+        }
       }
       throw reason;
     }
@@ -95,11 +126,20 @@ export function TestpaqWorkbench({ id, config, onConfig }: { id: string; config?
       .then((value) => {
         if (!active) return;
         savedVersionRef.current = value.updatedAt;
-        itemRef.current = value;
-        revisionRef.current = 0;
+        baseRef.current = value;
+        const draft = readDraft(value.id);
+        const recovered = draft && draft.base.updatedAt === value.updatedAt && value.status !== "completed";
+        itemRef.current = recovered ? draft.draft : value;
+        revisionRef.current = recovered ? 1 : 0;
         savedRevisionRef.current = 0;
-        setItem(value);
-        setRevision(0);
+        setItem(itemRef.current);
+        setRevision(revisionRef.current);
+        if (recovered) setDraftNotice("Recovered your unsaved local draft.");
+        else if (draft) {
+          const merged = mergeDraft(draft.base, draft.draft, value);
+          setRecovery({ local: draft.draft, remote: value, merged: merged.item, conflicts: merged.conflicts });
+          setDraftNotice("A local draft and the saved Testpaq differ. Compare them before saving.");
+        }
         setLoadedId(id);
       })
       .catch((reason: Error) => {
@@ -133,37 +173,67 @@ export function TestpaqWorkbench({ id, config, onConfig }: { id: string; config?
 
   const update = useCallback((recipe: (current: Testpaq) => Testpaq) => {
     const current = itemRef.current;
-    if (!current) return;
+    if (!current || current.status === "completed") return;
     const next = recipe(structuredClone(current));
     if (next.status === "exported") {
       next.status = "in_review";
       delete next.exportedAt;
     }
     itemRef.current = next;
+    try {
+      if (baseRef.current) writeDraft(baseRef.current, next);
+    } catch {
+      setDraftNotice("Browser storage is unavailable. Keep this tab open until your changes are saved.");
+    }
     revisionRef.current += 1;
     setRevision(revisionRef.current);
     setItem(next);
   }, []);
-  const exportMarkdown = async () => {
-    await flushSave();
+  const prepareExport = async (format: "markdown" | "qase") => {
+    const saved = await flushSave();
+    const current = saved ?? itemRef.current;
+    if (!current) throw new Error("Testpaq unavailable.");
+    return format === "qase" ? renderQaseCsv(current) : renderMarkdown(current);
+  };
+  const recordExport = async () => {
     const current = itemRef.current;
-    if (!current) return "";
+    if (!current) return;
     const exported = structuredClone(current);
-    exported.status = "exported";
+    if (exported.status !== "completed") exported.status = "exported";
     exported.exportedAt = new Date().toISOString();
     itemRef.current = exported;
     revisionRef.current += 1;
-    const exportRevision = revisionRef.current;
-    setRevision(exportRevision);
+    setRevision(revisionRef.current);
     setItem(exported);
-    let saved: Testpaq | undefined;
+    await flushSave();
+  };
+  const changeCompletion = async () => {
+    setHandoffBusy(true);
+    setError("");
     try {
-      saved = await flushSave();
-    } catch {
-      throw new Error("The latest changes could not be saved. Export was cancelled; retry after saving.");
+      await flushSave();
+      const current = itemRef.current!;
+      const draft = structuredClone(current);
+      if (draft.status === "completed") {
+        draft.status = "in_review";
+        delete draft.completedAt;
+      } else {
+        draft.status = "completed";
+        draft.completedAt = new Date().toISOString();
+      }
+      const saved = await api.save({ ...draft, updatedAt: savedVersionRef.current ?? draft.updatedAt });
+      itemRef.current = saved;
+      savedVersionRef.current = saved.updatedAt;
+      baseRef.current = saved;
+      savedRevisionRef.current = revisionRef.current;
+      setItem(saved);
+      setSaveState("saved");
+    } catch (reason) {
+      setError((reason as Error).message);
+      setSaveState("error");
+    } finally {
+      setHandoffBusy(false);
     }
-    if (revisionRef.current !== exportRevision) throw new Error("The brief changed while it was being exported. Review it and retry.");
-    return renderMarkdown(saved ?? exported);
   };
   const analyse = async () => {
     if (!item) return;
@@ -178,6 +248,7 @@ export function TestpaqWorkbench({ id, config, onConfig }: { id: string; config?
       const { item: refreshed } = await api.analyse(
         {
           testpaqId: current.id,
+          model: config?.model,
           ticket: current.ticket,
           requirements: current.requirements,
           questions: current.questions,
@@ -188,6 +259,12 @@ export function TestpaqWorkbench({ id, config, onConfig }: { id: string; config?
       if (!mountedRef.current || controller.signal.aborted) return;
       itemRef.current = refreshed;
       savedVersionRef.current = refreshed.updatedAt;
+      baseRef.current = refreshed;
+      try {
+        clearDraft(refreshed.id);
+      } catch {
+        /* Server copy has been committed. */
+      }
       savedRevisionRef.current = revisionRef.current;
       setItem(refreshed);
       setSaveState("saved");
@@ -244,15 +321,25 @@ export function TestpaqWorkbench({ id, config, onConfig }: { id: string; config?
           </div>
           <h1>{item.title}</h1>
         </div>
-        <div className={`save-state save-${saveState}`}>
-          {saveState === "saving" ? (
-            <LoaderCircle className="spin" size={14} />
-          ) : saveState === "saved" ? (
-            <Check size={14} />
-          ) : (
-            <AlertCircle size={14} />
+        <div className="button-group">
+          <Button variant="secondary" disabled={analysing || handoffBusy} onClick={() => void changeCompletion()}>
+            {item.status === "completed" ? "Reopen Testpaq" : "Mark completed"}
+          </Button>
+          {saveState === "error" && (
+            <Button variant="secondary" disabled={analysing || handoffBusy} onClick={() => void flushSave().catch(() => undefined)}>
+              Retry save
+            </Button>
           )}
-          {saveState === "saving" ? "Saving" : saveState === "saved" ? "Saved locally" : "Save failed"}
+          <div className={`save-state save-${saveState}`}>
+            {saveState === "saving" ? (
+              <LoaderCircle className="spin" size={14} />
+            ) : saveState === "saved" ? (
+              <Check size={14} />
+            ) : (
+              <AlertCircle size={14} />
+            )}
+            {saveState === "saving" ? "Saving" : saveState === "saved" ? "Saved locally" : "Save failed"}
+          </div>
         </div>
       </section>
       {error && (
@@ -267,10 +354,11 @@ export function TestpaqWorkbench({ id, config, onConfig }: { id: string; config?
           <button onClick={() => setError("")}>Dismiss</button>
         </div>
       )}
+      {draftNotice && <p className="warning-note">{draftNotice}</p>}
       <label className="field group-assignment">
         <span>Project group</span>
         <select
-          disabled={analysing}
+          disabled={analysing || handoffBusy || item.status === "completed"}
           value={item.groupId || ""}
           onChange={(event) =>
             update((draft) => {
@@ -287,12 +375,26 @@ export function TestpaqWorkbench({ id, config, onConfig }: { id: string; config?
           ))}
         </select>
       </label>
+      {item.status === "completed" && (
+        <p className="warning-note">
+          Completed{item.completedAt ? ` on ${item.completedAt.slice(0, 10)}` : ""}. Reopen to change coverage or run analysis. Exports
+          remain available.
+        </p>
+      )}
+      {item.lastRefresh && (
+        <p className="warning-note">
+          Last refresh: {item.lastRefresh.added.length} added · {item.lastRefresh.changed.length} changed ·{" "}
+          {item.lastRefresh.retained.length} retained.{" "}
+          {item.scenarios.filter((scenario) => scenario.scopeReviewRequired && !scenario.archived).length} accepted scenarios need scope
+          review.
+        </p>
+      )}
       {item.lastAnalysedSignature && item.lastAnalysedSignature !== analysisSignature(item) && (
         <div className="warning-note">
           Ticket, requirements or answers have changed since analysis. Refresh to review the updated scope.
         </div>
       )}
-      <fieldset className="workbench-body" disabled={analysing} inert={analysing}>
+      <fieldset className="workbench-body" disabled={analysing || handoffBusy} inert={analysing || handoffBusy}>
         <nav className="section-nav" aria-label="Testpaq sections">
           {tabs.map(([value, text, Icon, count]) => (
             <button key={value} aria-current={section === value ? "page" : undefined} onClick={() => setSection(value)}>
@@ -303,13 +405,104 @@ export function TestpaqWorkbench({ id, config, onConfig }: { id: string; config?
           ))}
         </nav>
         <section className="workbench-content">
-          {section === "ticket" && <TicketPanel item={item} update={update} onAnalyse={() => setAnalysisOpen(true)} />}
-          {section === "review" && <ReviewPanel item={item} update={update} />}
-          {section === "questions" && <QuestionsPanel item={item} update={update} onRefresh={() => setAnalysisOpen(true)} />}
-          {section === "export" && <ExportPanel item={item} markdown={renderMarkdown(item)} onExport={exportMarkdown} />}
+          {section === "ticket" && (
+            <fieldset className="editing-panels" disabled={item.status === "completed"}>
+              <TicketPanel item={item} update={update} onAnalyse={() => setAnalysisOpen(true)} />
+            </fieldset>
+          )}
+          {section === "review" && <ReviewPanel item={item} update={update} readOnly={item.status === "completed"} />}
+          {section === "questions" && (
+            <QuestionsPanel item={item} update={update} onRefresh={() => setAnalysisOpen(true)} readOnly={item.status === "completed"} />
+          )}
+          {section === "export" && (
+            <ExportPanel
+              item={item}
+              markdown={renderMarkdown(item)}
+              onExport={prepareExport}
+              onExported={recordExport}
+              onBusyChange={setHandoffBusy}
+            />
+          )}
           {section === "history" && <HistoryPanel testpaqId={item.id} version={historyVersion} />}
         </section>
       </fieldset>
+      <Dialog
+        open={Boolean(recovery)}
+        onOpenChange={(open) => {
+          if (!open) setRecovery(undefined);
+        }}
+        title="Compare local and saved changes"
+        description="Your local draft is retained. Review both copies before choosing what to save."
+        footer={
+          <>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                if (!recovery) return;
+                itemRef.current = recovery.remote;
+                baseRef.current = recovery.remote;
+                savedVersionRef.current = recovery.remote.updatedAt;
+                savedRevisionRef.current = revisionRef.current;
+                setItem(recovery.remote);
+                setSaveState("saved");
+                try {
+                  clearDraft(id);
+                } catch {
+                  setDraftNotice("Saved copy loaded. Browser draft storage could not be cleared.");
+                }
+                setRecovery(undefined);
+                setDraftNotice("");
+                setError("");
+              }}
+            >
+              Use saved copy
+            </Button>
+            <Button
+              disabled={recovery?.remote.status === "completed"}
+              onClick={() => {
+                if (!recovery) return;
+                itemRef.current = recovery.merged;
+                baseRef.current = recovery.remote;
+                savedVersionRef.current = recovery.remote.updatedAt;
+                revisionRef.current += 1;
+                setRevision(revisionRef.current);
+                setItem(recovery.merged);
+                setError("");
+                try {
+                  writeDraft(recovery.remote, recovery.merged);
+                } catch {
+                  setError("Browser draft storage is unavailable. Keep this tab open until the changes save.");
+                }
+                setRecovery(undefined);
+                setDraftNotice("Merged changes applied. Conflicting fields use your local values.");
+              }}
+            >
+              Apply merged draft
+            </Button>
+          </>
+        }
+      >
+        {recovery && (
+          <>
+            <p>
+              {recovery.conflicts.length
+                ? `Both copies changed: ${recovery.conflicts.join(", ")}. The merged draft uses your local values for these fields.`
+                : "Independent edits can be merged without conflicts."}
+            </p>
+            {recovery.remote.status === "completed" && (
+              <p>Reopen the saved Testpaq before merging a local draft. You can copy draft text from the comparison below.</p>
+            )}
+            <details open>
+              <summary>Local draft</summary>
+              <pre className="recovery-preview">{JSON.stringify(recovery.local, null, 2)}</pre>
+            </details>
+            <details>
+              <summary>Saved copy</summary>
+              <pre className="recovery-preview">{JSON.stringify(recovery.remote, null, 2)}</pre>
+            </details>
+          </>
+        )}
+      </Dialog>
       <Dialog
         open={analysisOpen}
         onOpenChange={(open) => {

@@ -126,3 +126,35 @@ describe("workbench persistence", () => {
     );
   });
 });
+
+it("persists completion, keeps export navigation available and reopens for editing", async () => {
+  const item = makeFixture();
+  vi.mocked(api.save).mockImplementation(async (snapshot) => ({ ...snapshot, updatedAt: "2026-10-01T12:00:01.000Z" }));
+  await load(item);
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Mark completed" }));
+  });
+  expect(vi.mocked(api.save).mock.calls.at(-1)?.[0]).toMatchObject({ status: "completed", completedAt: expect.any(String) });
+  expect(screen.getByLabelText("Description")).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Coverage brief" }));
+  expect(screen.getByRole("button", { name: "Download Qase CSV" })).toBeEnabled();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Reopen Testpaq" }));
+  });
+  expect(vi.mocked(api.save).mock.calls.at(-1)?.[0].status).toBe("in_review");
+  expect(vi.mocked(api.save).mock.calls.at(-1)?.[0].completedAt).toBeUndefined();
+  fireEvent.click(screen.getByRole("button", { name: "Ticket & requirements" }));
+  expect(screen.getByLabelText("Description")).toBeEnabled();
+});
+
+it("does not display completion when saving the transition fails", async () => {
+  vi.mocked(api.save).mockReset().mockRejectedValue(new Error("Database unavailable"));
+  await load(makeFixture());
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Mark completed" }));
+  });
+  expect(screen.getByRole("button", { name: "Mark completed" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Reopen Testpaq" })).not.toBeInTheDocument();
+  expect(screen.getByLabelText("Description")).toBeEnabled();
+  expect(screen.getByRole("alert")).toHaveTextContent("Database unavailable");
+});

@@ -42,3 +42,15 @@ describe("domain invariants", () => {
     expect(AnalysisResultSchema.safeParse(result).success).toBe(false);
   });
 });
+
+it("rejects duplicate aggregate entity IDs and requirement links", () => {
+  for (const key of ["requirements", "scenarios", "questions"] as const) {
+    const item = makeFixture();
+    const values = item[key];
+    values.push(structuredClone(values[0]) as never);
+    expect(TestpaqSchema.safeParse(item).success).toBe(false);
+  }
+  const item = makeFixture();
+  item.scenarios[0].requirementIds.push(item.scenarios[0].requirementIds[0]);
+  expect(TestpaqSchema.safeParse(item).success).toBe(false);
+});

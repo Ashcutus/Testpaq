@@ -8,8 +8,8 @@ describe("Markdown export", () => {
     const first = renderMarkdown(fixture);
     const second = renderMarkdown(fixture);
     expect(first).toBe(second);
-    expect(first).toContain("Qase candidate");
-    expect(first).toContain("Automation candidate");
+    expect(first).toContain("Qase CSV");
+    expect(first).toContain("Cypress");
     expect(first).not.toContain("exists in Qase");
     expect(first).toContain("## Uncovered requirements");
     expect(first).toContain("A help article must explain");
@@ -22,6 +22,6 @@ describe("Markdown export", () => {
     const second = fixture.requirements[1];
     const accepted = fixture.scenarios.find((scenario) => scenario.review === "accepted")!;
     accepted.requirementIds = [second.id];
-    expect(renderMarkdown(fixture)).toContain("- **Requirements:** 1");
+    expect(renderMarkdown(fixture)).toContain("- **Requirements:** 2");
   });
 });

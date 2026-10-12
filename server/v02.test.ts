@@ -145,3 +145,104 @@ describe("v0.2 API", () => {
     expect((await app.request("/api/testpaqs", { method: "POST", headers, body: "{" })).status).toBe(400);
   });
 });
+
+describe("v0.3 workflows", () => {
+  it("saves model selection without a billable request and records the selected model in analysis history", async () => {
+    const analyse = vi.fn(async () => empty);
+    const check = vi.fn(async () => undefined);
+    const list = vi.fn(async () => ["selected-model"]);
+    const provider: AnalysisProvider = {
+      name: "OpenAI",
+      model: "initial-model",
+      analyse,
+      checkAccess: check,
+      listModels: list,
+      withModel: (model) => ({ ...provider, model }),
+    };
+    const { send, app, store, input, item } = setup(provider);
+    const selected = await send("/api/provider/model", { model: "selected-model" }, "PATCH");
+    expect(await selected.json()).toMatchObject({ model: "selected-model", providerStatus: { status: "unchecked" } });
+    expect(store.getSetting("openai_model")).toBe("selected-model");
+    expect(check).not.toHaveBeenCalled();
+    expect(analyse).not.toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
+    expect(await (await send("/api/provider/models", {})).json()).toEqual(["selected-model"]);
+    expect((await send("/api/analyse", { ...input, model: "initial-model" })).status).toBe(409);
+    expect((await send("/api/analyse", { ...input, model: "selected-model" })).status).toBe(200);
+    expect(store.getRuns(item.id)[0].model).toBe("selected-model");
+    const restarted = createApp({ store, provider, sessionToken: "secret", allowedOrigin: "http://localhost" });
+    expect(await (await restarted.request("/api/config")).json()).toMatchObject({ model: "selected-model" });
+    expect((await app.request("/api/provider/model", { method: "PATCH", body: JSON.stringify({ model: "bad" }) })).status).toBe(403);
+  });
+  it("persists completion and reopening, blocks completed analysis and keeps CSV available", async () => {
+    const analyse = vi.fn(async () => empty);
+    const { send, app, store, item, input } = setup(fakeProvider(analyse));
+    const completed = await send(
+      `/api/testpaqs/${item.id}`,
+      { ...item, status: "completed", completedAt: new Date().toISOString() },
+      "PUT",
+    );
+    expect(completed.status).toBe(200);
+    const saved = await completed.json();
+    expect(store.list()[0].status).toBe("completed");
+    expect((await send("/api/analyse", input)).status).toBe(409);
+    expect(analyse).not.toHaveBeenCalled();
+    const csv = await app.request(`/api/testpaqs/${item.id}/qase.csv`);
+    expect(csv.headers.get("content-type")).toContain("text/csv");
+    expect(await csv.text()).toContain("to-be-automated");
+    expect((await send(`/api/testpaqs/${item.id}`, { ...saved, status: "in_review", completedAt: undefined }, "PUT")).status).toBe(200);
+    expect(store.get(item.id)?.status).toBe("in_review");
+  });
+});
+
+it("rejects untrusted hostnames before exposing HTML, data or mutation routes", async () => {
+  const { store } = setup();
+  const app = createApp({ store, sessionToken: "secret", allowedOrigin: "self", distDir: "/tmp/no-ui-needed" });
+  for (const path of ["/", "/api/config", "/api/testpaqs"]) {
+    const response = await app.request(`http://untrusted.example:4321${path}`);
+    expect(response.status).toBe(403);
+    expect(await response.text()).not.toContain("secret");
+  }
+  expect(
+    (
+      await app.request("http://untrusted.example:4321/api/testpaqs", {
+        method: "POST",
+        headers: { ...headers, origin: "http://untrusted.example:4321" },
+        body: JSON.stringify({ title: "Attack" }),
+      })
+    ).status,
+  ).toBe(403);
+});
+
+it("serializes overlapping access checks and refuses model changes during a check", async () => {
+  const deferred = Promise.withResolvers<void>();
+  const check = vi.fn(() => deferred.promise);
+  const { send } = setup(fakeProvider(async () => empty, check));
+  const first = send("/api/provider/check", {});
+  const second = send("/api/provider/check", {});
+  await vi.waitFor(() => expect(check).toHaveBeenCalledOnce());
+  expect((await second).status).toBe(409);
+  expect((await send("/api/provider/model", { model: "different-model" }, "PATCH")).status).toBe(409);
+  deferred.resolve();
+  expect((await first).status).toBe(200);
+});
+
+it("protects completed content on every save, allowing reopening and export metadata only", async () => {
+  const { send, item } = setup();
+  const completed = await (await send(`/api/testpaqs/${item.id}`, { ...item, status: "completed" }, "PUT")).json();
+  expect(
+    (
+      await send(
+        `/api/testpaqs/${item.id}`,
+        { ...completed, ticket: { ...completed.ticket, description: "Changed while completed" } },
+        "PUT",
+      )
+    ).status,
+  ).toBe(409);
+  expect(
+    (await send(`/api/testpaqs/${item.id}`, { ...completed, status: "in_review", title: "Reopen and edit together" }, "PUT")).status,
+  ).toBe(409);
+  const exported = await (await send(`/api/testpaqs/${item.id}`, { ...completed, exportedAt: new Date().toISOString() }, "PUT")).json();
+  expect(exported.status).toBe("completed");
+  expect((await send(`/api/testpaqs/${item.id}`, { ...exported, status: "in_review" }, "PUT")).status).toBe(200);
+});

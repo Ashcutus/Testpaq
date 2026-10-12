@@ -37,6 +37,10 @@ export const ScenarioSchema = z
     rationale: z.string().trim().max(3000).optional(),
     risks: z.array(z.string().trim().min(1).max(1000)).max(20),
     destinations: z.object({ manual: z.boolean(), qase: z.boolean(), automation: z.boolean() }),
+    archived: z.boolean().optional(),
+    scopeReviewRequired: z.boolean().optional(),
+    introducedInRun: z.uuid().optional(),
+    lastChangedInRun: z.uuid().optional(),
     editedByHumanAt: z.iso.datetime().optional(),
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
@@ -77,7 +81,16 @@ export const TestpaqSchema = z
     title: z.string().trim().min(1).max(300),
     groupId: z.uuid().optional(),
     lastAnalysedSignature: z.string().optional(),
-    status: z.enum(["draft", "in_review", "exported"]),
+    lastRefresh: z
+      .object({
+        added: z.array(z.uuid()).max(1000),
+        changed: z.array(z.uuid()).max(1000),
+        retained: z.array(z.uuid()).max(1000),
+        affected: z.array(z.uuid()).max(1000),
+        at: z.iso.datetime(),
+      })
+      .optional(),
+    status: z.enum(["draft", "in_review", "exported", "completed"]),
     ticket: TicketSchema,
     requirements: z.array(RequirementSchema).max(500),
     scenarios: z.array(ScenarioSchema).max(1000),
@@ -85,8 +98,16 @@ export const TestpaqSchema = z
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
     exportedAt: z.iso.datetime().optional(),
+    completedAt: z.iso.datetime().optional(),
   })
   .superRefine((testpaq, context) => {
+    for (const key of ["requirements", "scenarios", "questions"] as const) {
+      if (new Set(testpaq[key].map((value) => value.id)).size !== testpaq[key].length)
+        context.addIssue({ code: "custom", path: [key], message: `Duplicate ${key} IDs.` });
+    }
+    for (const [index, scenario] of testpaq.scenarios.entries())
+      if (new Set(scenario.requirementIds).size !== scenario.requirementIds.length)
+        context.addIssue({ code: "custom", path: ["scenarios", index, "requirementIds"], message: "Duplicate requirement links." });
     const requirementIds = new Set(testpaq.requirements.map((item) => item.id));
     const scenarioIds = new Set(testpaq.scenarios.map((item) => item.id));
     for (const [index, scenario] of testpaq.scenarios.entries()) {
@@ -108,6 +129,7 @@ export const TestpaqSchema = z
 
 export const AnalysisInputSchema = z.object({
   testpaqId: z.uuid(),
+  model: z.string().trim().min(1).max(100).optional(),
   ticket: TicketSchema,
   requirements: z.array(RequirementSchema).max(500),
   questions: z.array(QuestionSchema).max(500).optional(),
@@ -203,21 +225,46 @@ export type TestpaqSummary = Pick<Testpaq, "id" | "title" | "groupId" | "status"
   openQuestionCount: number;
 };
 
-export type AnalysisRun = {
-  id: string;
-  testpaqId: string;
-  provider: string;
-  model: string;
-  promptVersion: string;
-  status: "running" | "succeeded" | "failed";
-  disclosure: string;
-  inputHash: string;
-  inputSnapshot?: AnalysisInput;
-  result?: AnalysisResult;
-  errorCode?: string;
-  createdAt: string;
-  completedAt?: string;
-};
+export const AnalysisRunSchema = z.object({
+  id: z.uuid(),
+  testpaqId: z.uuid(),
+  provider: z.string().min(1).max(100),
+  model: z.string().min(1).max(100),
+  promptVersion: z.string().min(1).max(100),
+  status: z.enum(["running", "succeeded", "failed"]),
+  disclosure: z.string().max(10000),
+  inputHash: z.string().max(100),
+  inputSnapshot: AnalysisInputSchema.optional(),
+  result: AnalysisResultSchema.optional(),
+  errorCode: z.string().max(100).optional(),
+  createdAt: z.iso.datetime(),
+  completedAt: z.iso.datetime().optional(),
+});
+export type AnalysisRun = z.infer<typeof AnalysisRunSchema>;
+export const WorkspaceBackupSchema = z
+  .object({
+    format: z.literal("testpaq-workspace"),
+    version: z.literal(1),
+    createdAt: z.iso.datetime(),
+    groups: z.array(z.object({ id: z.uuid(), name: z.string().trim().min(1).max(100) })).max(10000),
+    testpaqs: z.array(TestpaqSchema).max(10000),
+    runs: z.array(AnalysisRunSchema).max(100000),
+    model: z.string().trim().min(1).max(100).optional(),
+  })
+  .superRefine((backup, context) => {
+    for (const key of ["groups", "testpaqs", "runs"] as const)
+      if (new Set(backup[key].map((value) => value.id)).size !== backup[key].length)
+        context.addIssue({ code: "custom", path: [key], message: "Duplicate backup IDs." });
+    if (new Set(backup.groups.map((group) => group.name.toLowerCase())).size !== backup.groups.length)
+      context.addIssue({ code: "custom", path: ["groups"], message: "Duplicate group names." });
+    const groups = new Set(backup.groups.map((group) => group.id));
+    const items = new Set(backup.testpaqs.map((item) => item.id));
+    if (backup.testpaqs.some((item) => item.groupId && !groups.has(item.groupId)))
+      context.addIssue({ code: "custom", path: ["testpaqs"], message: "Unknown backup group." });
+    if (backup.runs.some((run) => !items.has(run.testpaqId) || (run.inputSnapshot && run.inputSnapshot.testpaqId !== run.testpaqId)))
+      context.addIssue({ code: "custom", path: ["runs"], message: "Unknown or inconsistent analysis owner." });
+  });
+export type WorkspaceBackup = z.infer<typeof WorkspaceBackupSchema>;
 
 export type ProjectGroup = { id: string; name: string };
 export type ProviderStatus = {

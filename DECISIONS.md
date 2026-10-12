@@ -31,3 +31,15 @@ Project groups are durable SQLite rows, with optional membership on the aggregat
 Refresh sends the current questions/answers and scenarios. Suggestions match existing IDs/titles; reviewed or human edited scenarios and answers remain intact. Old coverage is retained for explicit human review. Changed requirements are added rather than silently rewriting prior provenance. A semantic input signature flags changed ticket scope, requirements or answers.
 
 Analysis merging moved from the browser to an atomic server transaction, with both aggregate and result validated before commit. A timestamp version prevents stale saves and conflicting in-flight analysis. The browser serialises autosaves and carries forward the latest saved version without discarding newer local edits.
+
+## v0.3 model preference and Qase handoff
+
+Model selection creates an immutable provider instance sharing the existing server-side client. An in-flight analysis retains its original model; subsequent analysis uses the selected model. Preferences are persisted separately from credentials, and stale-model analysis requests are rejected before sending ticket content. Account model discovery is user-triggered and does not assert structured-output compatibility or billing access.
+
+Completion is an explicit, reversible human decision, independent of export or execution. Completed Testpaqs remain exportable and require reopening for UI edits and analysis. A new SQLite status constraint is installed transactionally while preserving analysis-run references and project groups.
+
+Qase export is deterministic native v2 CSV, using the full published template and nested step quoting. Accepted Qase or Cypress selections are included once. Existing automation intentions map to Cypress and Qase's `to-be-automated` slug. Blank Qase IDs deliberately create new cases; no remote import success or executable automation is claimed. The current scenario model provides a title and expected outcome, so these map to a single classic action/result pair rather than invented procedural steps.
+
+## Whole-app remediation after the forensic checkpoint
+
+Enforce database ownership before interrupted-run recovery, validate loopback Host values, and commit completion only after persistence. Undo reverses affected scenarios rather than whole aggregates. Workspace backups and pre-change snapshots provide recovery; browser drafts retain pending edits and merge independent changes by stable IDs. Refresh retains reviewed decisions while exposing change summaries, scope-review flags and explicit archives. Lists/history paginate; screenshots and browser checks use synthetic data. Historical findings remain in FORENSIC_REVIEW.md; REMEDIATION.md records the fixes.

@@ -4,6 +4,8 @@ import { AnalysisResultSchema, type AnalysisInput, type AnalysisResult } from ".
 export interface AnalysisProvider {
   readonly name: string;
   readonly model: string;
+  withModel?(model: string): AnalysisProvider;
+  listModels?(): Promise<string[]>;
   checkAccess?(): Promise<void>;
   analyse(input: AnalysisInput, signal?: AbortSignal): Promise<AnalysisResult>;
 }
@@ -13,9 +15,18 @@ export class OpenAIAnalysisProvider implements AnalysisProvider {
   readonly model: string;
   private readonly client: OpenAI;
 
-  constructor(apiKey: string, model = "gpt-5-mini") {
-    this.client = new OpenAI({ apiKey, timeout: 120_000, maxRetries: 0 });
+  constructor(apiKey: string | OpenAI, model = "gpt-5-mini") {
+    this.client = typeof apiKey === "string" ? new OpenAI({ apiKey, timeout: 120_000, maxRetries: 0 }) : apiKey;
     this.model = model;
+  }
+
+  withModel(model: string): OpenAIAnalysisProvider {
+    return new OpenAIAnalysisProvider(this.client, model);
+  }
+
+  async listModels(): Promise<string[]> {
+    const models = await this.client.models.list();
+    return models.data.map(({ id }) => id).sort();
   }
 
   async checkAccess(): Promise<void> {
@@ -39,7 +50,7 @@ export class OpenAIAnalysisProvider implements AnalysisProvider {
           ticket: input.ticket,
           questionsAndAnswers: input.questions ?? [],
           existingScenarios: input.scenarios ?? [],
-          existingRequirements: input.requirements.map(({ id, text, source }) => ({ clientId: id, text, source })),
+          existingRequirements: input.requirements.map(({ id, text, source, active }) => ({ clientId: id, text, source, active })),
         }),
         text: {
           format: {

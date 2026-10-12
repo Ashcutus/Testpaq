@@ -57,7 +57,7 @@ it("upgrades a v0.1 database without altering Testpaqs or analysis snapshots", (
     old.close();
     const migrated = new TestpaqStore(path);
     try {
-      expect(migrated.database.pragma("user_version", { simple: true })).toBe(3);
+      expect(migrated.database.pragma("user_version", { simple: true })).toBe(4);
       expect(migrated.get(fixture.id)).toEqual(fixture);
       expect(migrated.listGroups()).toEqual([]);
       expect(migrated.getRuns(fixture.id)[0]).toMatchObject({ errorCode: "interrupted", status: "failed", inputSnapshot });
@@ -66,5 +66,110 @@ it("upgrades a v0.1 database without altering Testpaqs or analysis snapshots", (
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("upgrades v0.2 preserving groups, payloads and completed analysis history", () => {
+  const dir = mkdtempSync(join(tmpdir(), "testpaq-v03-migration-"));
+  const path = join(dir, "testpaq.db");
+  try {
+    const old = new TestpaqStore(path);
+    const group = old.saveGroup("Existing project");
+    const item = { ...makeFixture(), groupId: group.id };
+    old.save(item);
+    const run = old.startRun({
+      testpaqId: item.id,
+      provider: "OpenAI",
+      model: "old-model",
+      promptVersion: "v2",
+      disclosure: "test",
+      inputHash: "hash",
+    });
+    old.finishRun(run.id, { requirements: [], scenarios: [], questions: [] });
+    old.database.exec("DROP TABLE settings; PRAGMA user_version=3;");
+    old.close();
+    const migrated = new TestpaqStore(path);
+    try {
+      expect(migrated.get(item.id)).toEqual(item);
+      expect(migrated.listGroups()).toEqual([group]);
+      expect(migrated.getRuns(item.id)[0]).toMatchObject({ id: run.id, status: "succeeded", model: "old-model" });
+      expect(migrated.database.pragma("foreign_key_check")).toEqual([]);
+      migrated.save({ ...item, status: "completed", completedAt: new Date().toISOString() });
+      expect(migrated.get(item.id)?.status).toBe("completed");
+      migrated.remove(item.id);
+      expect(migrated.getRuns(item.id)).toEqual([]);
+    } finally {
+      migrated.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("rejects a second workspace owner without interrupting its running analysis", () => {
+  const dir = mkdtempSync(join(tmpdir(), "testpaq-owner-"));
+  const path = join(dir, "testpaq.db");
+  try {
+    const first = new TestpaqStore(path);
+    const item = makeFixture();
+    first.save(item);
+    first.startRun({ testpaqId: item.id, provider: "test", model: "test", promptVersion: "v3", disclosure: "test", inputHash: "hash" });
+    expect(() => new TestpaqStore(path)).toThrow(/already running/);
+    expect(first.getRuns(item.id)[0].status).toBe("running");
+    first.close();
+    const reopened = new TestpaqStore(path);
+    expect(reopened.getRuns(item.id)[0].errorCode).toBe("interrupted");
+    reopened.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it("round trips groups, Testpaqs, history and model preference and rejects invalid restores atomically", () => {
+  const store = new TestpaqStore(":memory:");
+  const restored = new TestpaqStore(":memory:");
+  try {
+    const group = store.saveGroup("QA project");
+    const item = { ...makeFixture(), groupId: group.id };
+    store.save(item);
+    store.setSetting("openai_model", "selected-model");
+    const run = store.startRun({
+      testpaqId: item.id,
+      provider: "OpenAI",
+      model: "selected-model",
+      promptVersion: "v3",
+      disclosure: "test",
+      inputHash: "hash",
+    });
+    store.finishRun(run.id, { requirements: [], scenarios: [], questions: [] });
+    const backup = store.backup();
+    restored.restore(backup);
+    expect(restored.get(item.id)).toEqual(item);
+    expect(restored.listGroups()).toEqual([group]);
+    expect(restored.getRuns(item.id)).toEqual(store.getRuns(item.id));
+    expect(restored.getSetting("openai_model")).toBe("selected-model");
+    expect(() => restored.restore({ ...backup, testpaqs: [{ ...item, groupId: crypto.randomUUID() }] })).toThrow();
+    expect(restored.get(item.id)).toEqual(item);
+    expect(restored.database.pragma("foreign_key_check")).toEqual([]);
+  } finally {
+    store.close();
+    restored.close();
+  }
+});
+
+it("paginates summaries and searches the complete workspace with literal wildcard text", () => {
+  const store = new TestpaqStore(":memory:");
+  try {
+    for (let index = 0; index < 105; index++) store.save({ ...makeFixture(), title: `Work ${index}` });
+    const target = { ...makeFixture(), title: "100% ready_" };
+    store.save(target);
+    const first = store.list(100);
+    const next = store.list(100, 100);
+    expect(first).toHaveLength(100);
+    expect(next).toHaveLength(6);
+    expect(new Set([...first, ...next].map((item) => item.id)).size).toBe(106);
+    expect(store.list(100, 0, "100% ready_").map((item) => item.id)).toEqual([target.id]);
+  } finally {
+    store.close();
   }
 });

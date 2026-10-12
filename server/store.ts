@@ -1,8 +1,10 @@
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import {
+  WorkspaceBackupSchema,
+  type WorkspaceBackup,
   AnalysisInputSchema,
   AnalysisResultSchema,
   TestpaqSchema,
@@ -11,20 +13,40 @@ import {
   type TestpaqSummary,
 } from "../src/shared/domain.js";
 
+import { acquireDatabaseLock } from "./database-lock.js";
+
 type DatabaseInstance = InstanceType<typeof Database>;
 
 export class TestpaqStore {
   readonly database: DatabaseInstance;
+  private readonly releaseLock: () => void;
 
-  constructor(path: string) {
+  constructor(private readonly path: string) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    this.database = new Database(path);
-    this.database.pragma("foreign_keys = ON");
-    this.database.pragma("journal_mode = WAL");
-    this.migrate();
-    this.database
-      .prepare("UPDATE analysis_runs SET status='failed', error_code='interrupted', completed_at=? WHERE status='running'")
-      .run(new Date().toISOString());
+    this.releaseLock = path === ":memory:" ? () => undefined : acquireDatabaseLock(path);
+    const existed = path !== ":memory:" && existsSync(path);
+    let opened: DatabaseInstance | undefined;
+    try {
+      opened = new Database(path);
+      this.database = opened;
+      this.database.pragma("foreign_keys = ON");
+      this.database.pragma("journal_mode = WAL");
+      const version = this.database.pragma("user_version", { simple: true }) as number;
+      if (version > 4) throw new Error("This workspace was created by a newer Testpaq version. Upgrade Testpaq before opening it.");
+      if (existed && version > 0 && version < 4) {
+        const backup = `${path}.before-v03-${Date.now()}-${randomUUID()}.backup`;
+        this.database.prepare("VACUUM INTO ?").run(backup);
+        chmodSync(backup, 0o600);
+      }
+      this.migrate();
+      this.database
+        .prepare("UPDATE analysis_runs SET status='failed', error_code='interrupted', completed_at=? WHERE status='running'")
+        .run(new Date().toISOString());
+    } catch (error) {
+      if (opened?.open) opened.close();
+      this.releaseLock();
+      throw error;
+    }
   }
 
   private migrate() {
@@ -71,6 +93,80 @@ export class TestpaqStore {
         PRAGMA user_version = 3;
       `);
     }
+    if (version < 4) {
+      // Rebuild the status constraint without cascading deletion of analysis history.
+      this.database.pragma("foreign_keys = OFF");
+      try {
+        this.database.transaction(() => {
+          this.database.exec(`
+            CREATE TABLE testpaqs_v3 (
+              id TEXT PRIMARY KEY, title TEXT NOT NULL, reference TEXT NOT NULL DEFAULT '',
+              status TEXT NOT NULL CHECK(status IN ('draft', 'in_review', 'exported', 'completed')),
+              payload TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            INSERT INTO testpaqs_v3 SELECT * FROM testpaqs;
+            DROP TABLE testpaqs;
+            ALTER TABLE testpaqs_v3 RENAME TO testpaqs;
+            CREATE INDEX testpaqs_updated_at_idx ON testpaqs(updated_at DESC);
+            CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            PRAGMA user_version = 4;
+          `);
+        })();
+      } finally {
+        this.database.pragma("foreign_keys = ON");
+      }
+    }
+  }
+
+  backup(): WorkspaceBackup {
+    const rows = this.database.prepare("SELECT payload FROM testpaqs ORDER BY id").all() as Array<{ payload: string }>;
+    const runs = this.database.prepare("SELECT * FROM analysis_runs ORDER BY created_at, id").all() as Record<string, string | null>[];
+    return WorkspaceBackupSchema.parse({
+      format: "testpaq-workspace",
+      version: 1,
+      createdAt: new Date().toISOString(),
+      groups: this.listGroups(),
+      testpaqs: rows.map(({ payload }) => JSON.parse(payload)),
+      runs: runs.map(mapRun),
+      model: this.getSetting("openai_model"),
+    });
+  }
+
+  restore(input: unknown) {
+    const backup = WorkspaceBackupSchema.parse(input);
+    if (this.path !== ":memory:") {
+      const snapshot = `${this.path}.before-restore-${Date.now()}-${randomUUID()}.backup`;
+      this.database.prepare("VACUUM INTO ?").run(snapshot);
+      chmodSync(snapshot, 0o600);
+    }
+    this.database.transaction(() => {
+      this.database.exec("DELETE FROM analysis_runs; DELETE FROM testpaqs; DELETE FROM project_groups; DELETE FROM settings;");
+      for (const group of backup.groups) this.saveGroup(group.name, group.id);
+      for (const item of backup.testpaqs) this.save(item);
+      const insert = this.database.prepare(
+        `INSERT INTO analysis_runs (id,testpaq_id,provider,model,prompt_version,status,disclosure,input_hash,input_snapshot_json,result_json,error_code,created_at,completed_at) VALUES (@id,@testpaqId,@provider,@model,@promptVersion,@status,@disclosure,@inputHash,@inputSnapshot,@result,@errorCode,@createdAt,@completedAt)`,
+      );
+      for (const run of backup.runs)
+        insert.run({
+          ...run,
+          status: run.status === "running" ? "failed" : run.status,
+          inputSnapshot: run.inputSnapshot ? JSON.stringify(run.inputSnapshot) : null,
+          result: run.result ? JSON.stringify(run.result) : null,
+          errorCode: run.status === "running" ? "interrupted" : (run.errorCode ?? null),
+          completedAt: run.status === "running" ? new Date().toISOString() : (run.completedAt ?? null),
+        });
+      if (backup.model) this.setSetting("openai_model", backup.model);
+    })();
+  }
+
+  getSetting(key: string): string | undefined {
+    return (this.database.prepare("SELECT value FROM settings WHERE key=?").get(key) as { value: string } | undefined)?.value;
+  }
+
+  setSetting(key: string, value: string) {
+    this.database
+      .prepare("INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .run(key, value);
   }
 
   listGroups(): Array<{ id: string; name: string }> {
@@ -101,22 +197,19 @@ export class TestpaqStore {
     })();
   }
 
-  list(): TestpaqSummary[] {
-    const rows = this.database.prepare("SELECT payload FROM testpaqs ORDER BY updated_at DESC").all() as Array<{ payload: string }>;
-    return rows.map(({ payload }) => {
-      const item = TestpaqSchema.parse(JSON.parse(payload));
-      return {
-        id: item.id,
-        title: item.title,
-        groupId: item.groupId,
-        reference: item.ticket.reference,
-        status: item.status,
-        scenarioCount: item.scenarios.length,
-        openQuestionCount: item.questions.filter((question) => question.status === "open").length,
-        createdAt: item.createdAt,
-        updatedAt: item.updatedAt,
-      };
-    });
+  list(limit = -1, offset = 0, query = "", group = "all"): TestpaqSummary[] {
+    const search = `%${query.toLowerCase().replace(/[\\%_]/g, (value) => `\\${value}`)}%`;
+    const rows = this.database
+      .prepare(
+        `SELECT id,title,reference,status,created_at AS createdAt,updated_at AS updatedAt,
+      json_extract(payload,'$.groupId') AS groupId, json_array_length(payload,'$.scenarios') AS scenarioCount,
+      (SELECT count(*) FROM json_each(payload,'$.questions') WHERE json_extract(value,'$.status')='open') AS openQuestionCount
+      FROM testpaqs WHERE lower(title || ' ' || reference) LIKE ? ESCAPE '\\'
+      AND (?='all' OR (?='ungrouped' AND json_extract(payload,'$.groupId') IS NULL) OR json_extract(payload,'$.groupId')=?)
+      ORDER BY updated_at DESC, id LIMIT ? OFFSET ?`,
+      )
+      .all(search, group, group, group, limit, offset) as TestpaqSummary[];
+    return rows.map((row) => ({ ...row, groupId: row.groupId ?? undefined }));
   }
 
   get(id: string): Testpaq | undefined {
@@ -166,7 +259,7 @@ export class TestpaqStore {
     const parsed = AnalysisResultSchema.parse(result);
     const completedAt = new Date().toISOString();
     this.database
-      .prepare("UPDATE analysis_runs SET status='succeeded', result_json=?, completed_at=? WHERE id=?")
+      .prepare("UPDATE analysis_runs SET status='succeeded', error_code=NULL, result_json=?, completed_at=? WHERE id=?")
       .run(JSON.stringify(parsed), completedAt, id);
     return this.getRun(id)!;
   }
@@ -179,10 +272,10 @@ export class TestpaqStore {
     return this.getRun(id)!;
   }
 
-  getRuns(testpaqId: string): AnalysisRun[] {
+  getRuns(testpaqId: string, limit = -1, offset = 0): AnalysisRun[] {
     const rows = this.database
-      .prepare("SELECT * FROM analysis_runs WHERE testpaq_id = ? ORDER BY created_at DESC")
-      .all(testpaqId) as Record<string, string | null>[];
+      .prepare("SELECT * FROM analysis_runs WHERE testpaq_id = ? ORDER BY created_at DESC, id LIMIT ? OFFSET ?")
+      .all(testpaqId, limit, offset) as Record<string, string | null>[];
     return rows.map(mapRun);
   }
 
@@ -192,7 +285,8 @@ export class TestpaqStore {
   }
 
   close() {
-    this.database.close();
+    if (this.database.open) this.database.close();
+    this.releaseLock();
   }
 }
 

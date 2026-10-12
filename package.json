@@ -1,6 +1,6 @@
 {
   "name": "testpaq",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "bin": {
@@ -19,12 +19,13 @@
     "format:check": "prettier --check .",
     "format": "prettier --write .",
     "prebuild": "node scripts/check-env.mjs",
-    "run": "node scripts/run.mjs"
+    "run": "node scripts/run.mjs",
+    "test:browser": "npm run build && node scripts/browser-smoke.mjs",
+    "gallery": "npm run build && node scripts/browser-smoke.mjs --gallery"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.4",
     "@radix-ui/react-dialog": "^1.1.15",
-    "@tailwindcss/vite": "^4.1.15",
     "better-sqlite3": "^13.0.3",
     "hono": "^4.13.11",
     "lucide-react": "^0.545.0",
@@ -36,6 +37,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.38.0",
+    "@tailwindcss/vite": "^4.1.15",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.0",
     "@types/better-sqlite3": "^7.6.13",
@@ -49,15 +51,21 @@
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^16.4.0",
     "jsdom": "^27.0.1",
+    "playwright": "^1.64.0",
     "prettier": "^3.6.2",
     "tailwindcss": "^4.1.15",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.2",
     "vite": "^7.1.12",
-    "vitest": "^3.2.4"
+    "vitest": "^5.0.4"
   },
   "engines": {
     "node": ">=22"
+  },
+  "overrides": {
+    "shell-quote": "^1.12.0",
+    "source-map-js": "^1.2.2",
+    "tinypool": "^2.2.0"
   }
 }

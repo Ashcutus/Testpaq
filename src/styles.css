@@ -406,7 +406,8 @@ textarea {
   letter-spacing: 0.04em;
 }
 .status-in_review,
-.status-succeeded {
+.status-succeeded,
+.status-completed {
   color: var(--green);
   background: var(--green-soft);
   border-color: color-mix(in srgb, var(--green) 25%, transparent);
@@ -1448,7 +1449,14 @@ kbd {
 
 @media (max-width: 620px) {
   .topbar {
-    padding: 0 13px;
+    padding: 10px 13px;
+    height: auto;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .topbar-actions {
+    flex-wrap: wrap;
+    gap: 6px;
   }
   .local-indicator {
     display: none;
@@ -1599,4 +1607,35 @@ button:disabled {
 }
 .disclosure-preview dd {
   white-space: pre-wrap;
+}
+
+.editing-panels {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.editing-panels:disabled {
+  opacity: 0.75;
+}
+
+.recovery-preview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 350px;
+  overflow: auto;
+  font-size: 12px;
+}
+[aria-invalid="true"] {
+  border-color: var(--red);
+}
+.export-cases {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+.export-cases th,
+.export-cases td {
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
 }
