@@ -164,15 +164,14 @@ try {
   assert.equal(await page.locator(".test-case-card").count(), 1);
   // Existing case stays accepted; newly generated cases require explicit review.
   await page.locator(".case-list-item").nth(1).click();
-  await page.getByRole("button", { name: "Accept case", exact: true }).click();
-  await page.locator(".case-list-item").nth(2).click();
+  await page.getByRole("button", { name: "Accept and review next", exact: true }).click();
+  assert.equal(await page.getByLabel("Test case title").inputValue(), "Anonymous reader sees no hidden campaign amount");
   await page.getByRole("button", { name: "Accept case", exact: true }).click();
   // Keep the detailed generated case visible in the gallery.
   await page.locator(".case-list-item").nth(1).click();
   await capture("test-cases");
-  await page.getByRole("button", { name: "Coverage brief & handoff", exact: true }).click();
+  await page.getByRole("heading", { name: "Export accepted tests", exact: true }).waitFor();
   await page.getByRole("button", { name: "Download Qase CSV" }).waitFor();
-  await capture("qase-export");
   const downloadPending = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download Qase CSV" }).click();
   const download = await downloadPending;
@@ -192,6 +191,8 @@ try {
   for await (const chunk of manualStream) manual += chunk.toString();
   assert.ok(manual.includes("Owner hides amount"));
   assert.ok(manual.includes("Expected:"));
+  await page.getByRole("button", { name: "Coverage brief & handoff", exact: true }).click();
+  await capture("qase-export");
   await page.getByRole("button", { name: /^Test cases/ }).click();
   await page.locator(".case-list-item").nth(0).click();
   await page.getByRole("button", { name: "Suggest case update with AI", exact: true }).click();

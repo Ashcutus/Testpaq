@@ -156,3 +156,18 @@ it("keeps a single editor while searching, filtering and navigating linked cases
   expect(screen.getByText("No cases match these filters.")).toBeInTheDocument();
   expect(screen.queryByLabelText("Test case title")).not.toBeInTheDocument();
 });
+
+it("accepts the current draft and moves to the next draft without accepting it", () => {
+  const item = makeFixture();
+  item.testCases = [
+    { ...reviewedFixtureCase(item), title: "First draft", review: "proposed" },
+    { ...reviewedFixtureCase(item), id: crypto.randomUUID(), title: "Second draft", review: "proposed" },
+  ];
+  render(<Harness initial={item} />);
+  fireEvent.click(screen.getByRole("button", { name: "Accept and review next" }));
+  expect(screen.getByLabelText("Test case title")).toHaveValue("Second draft");
+  const saved = JSON.parse(screen.getByTestId("state").textContent!) as Testpaq;
+  expect(saved.testCases!.map((value) => value.review)).toEqual(["accepted", "proposed"]);
+  fireEvent.click(screen.getByRole("button", { name: "Accept case" }));
+  expect(screen.getByRole("button", { name: "Case accepted" })).toBeDisabled();
+});

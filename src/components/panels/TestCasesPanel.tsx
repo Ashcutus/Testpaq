@@ -256,6 +256,19 @@ export function TestCasesPanel({
           value.title.trim() &&
           value.objective.trim() &&
           value.steps.every((step) => step.action.trim() && step.expectedResult.trim());
+        const nextProposed = visibleCases.find((entry) => entry.id !== value.id && entry.review === "proposed" && !entry.archived);
+        const accept = () =>
+          edit(
+            value.id,
+            (testCase, draft) => {
+              testCase.review = "accepted";
+              testCase.sourceSignature = caseScopeSignature(
+                draft,
+                draft.scenarios.find((scenario) => scenario.id === testCase.scenarioId)!,
+              );
+            },
+            false,
+          );
         return (
           <details className="test-case-card" key={value.id} data-case-id={value.id} open>
             <summary>
@@ -377,69 +390,6 @@ export function TestCasesPanel({
                     </section>
                   );
                 })()}
-              <div className="button-group">
-                {!value.replacesCaseId && (
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    disabled={!canReview || value.archived}
-                    onClick={() => onDraft(parent!.id, value.id)}
-                  >
-                    Suggest case update with AI
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  disabled={!canAccept}
-                  onClick={() =>
-                    edit(
-                      value.id,
-                      (testCase, draft) => {
-                        testCase.review = "accepted";
-                        testCase.sourceSignature = caseScopeSignature(
-                          draft,
-                          draft.scenarios.find((scenario) => scenario.id === testCase.scenarioId)!,
-                        );
-                      },
-                      false,
-                    )
-                  }
-                >
-                  {needsReview ? "Accept current scope" : "Accept case"}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={readOnly || value.archived}
-                  onClick={() =>
-                    edit(
-                      value.id,
-                      (testCase) => {
-                        testCase.review = "rejected";
-                      },
-                      false,
-                    )
-                  }
-                >
-                  Reject case
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={readOnly}
-                  onClick={() =>
-                    edit(
-                      value.id,
-                      (testCase) => {
-                        testCase.archived = !testCase.archived;
-                      },
-                      false,
-                    )
-                  }
-                >
-                  {value.archived ? "Restore case" : "Archive case"}
-                </Button>
-              </div>
               {needsReview && (
                 <p className="warning-note">
                   Changed: {caseScopeChanges(item, value).join(" · ")}. Review the case or request an AI update.
@@ -619,6 +569,65 @@ export function TestCasesPanel({
                 </Button>
                 <p className="muted">Content edits return the case to Proposed. Destination changes do not change its review decision.</p>
               </fieldset>
+              <div className="button-group">
+                {!value.replacesCaseId && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={!canReview || value.archived}
+                    onClick={() => onDraft(parent!.id, value.id)}
+                  >
+                    Suggest case update with AI
+                  </Button>
+                )}
+                <Button size="sm" disabled={!canAccept || (value.review === "accepted" && !needsReview)} onClick={accept}>
+                  {needsReview ? "Accept current scope" : value.review === "accepted" ? "Case accepted" : "Accept case"}
+                </Button>
+                {nextProposed && (
+                  <Button
+                    size="sm"
+                    disabled={!canAccept || (value.review === "accepted" && !needsReview)}
+                    onClick={() => {
+                      accept();
+                      setActiveCaseId(nextProposed.id);
+                    }}
+                  >
+                    Accept and review next
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={readOnly || value.archived}
+                  onClick={() =>
+                    edit(
+                      value.id,
+                      (testCase) => {
+                        testCase.review = "rejected";
+                      },
+                      false,
+                    )
+                  }
+                >
+                  Reject case
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={readOnly}
+                  onClick={() =>
+                    edit(
+                      value.id,
+                      (testCase) => {
+                        testCase.archived = !testCase.archived;
+                      },
+                      false,
+                    )
+                  }
+                >
+                  {value.archived ? "Restore case" : "Archive case"}
+                </Button>
+              </div>
             </div>
           </details>
         );
