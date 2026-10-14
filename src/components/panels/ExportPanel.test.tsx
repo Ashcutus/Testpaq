@@ -45,3 +45,16 @@ describe("export handoff", () => {
     expect(events[1]).toBe("recorded");
   });
 });
+
+it("offers case downloads inline while excluding unaccepted drafts", () => {
+  const item = makeFixture();
+  item.testCases = [
+    reviewedFixtureCase(item),
+    { ...reviewedFixtureCase(item), id: crypto.randomUUID(), title: "Unreviewed draft", review: "proposed" },
+  ];
+  render(<ExportPanel casesOnly item={item} markdown="brief" onExport={vi.fn()} onExported={vi.fn()} onBusyChange={vi.fn()} />);
+  expect(screen.getByRole("button", { name: "Download manual cases" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Download Qase CSV" })).toBeEnabled();
+  expect(screen.queryByRole("button", { name: "Copy" })).not.toBeInTheDocument();
+  expect(screen.queryByText("Unreviewed draft")).not.toBeInTheDocument();
+});

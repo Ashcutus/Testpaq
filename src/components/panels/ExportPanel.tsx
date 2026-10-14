@@ -12,7 +12,9 @@ export function ExportPanel({
   onExport,
   onExported,
   onBusyChange,
+  casesOnly = false,
 }: {
+  casesOnly?: boolean;
   item: Testpaq;
   markdown: string;
   onExport: (format: "markdown" | "manual" | "qase") => Promise<string>;
@@ -63,50 +65,64 @@ export function ExportPanel({
     }
   };
   return (
-    <div className="panel-stack">
-      <div className="content-heading">
-        <div>
-          <p className="eyebrow">Deterministic handoff</p>
-          <h2>QA coverage brief</h2>
-          <p>Generated from the reviewed local state—not from a fresh AI response.</p>
-        </div>
-        <div className="button-group">
-          <Button
-            variant="secondary"
-            icon={copied ? <Check size={16} /> : <Clipboard size={16} />}
-            disabled={busy}
-            onClick={() => void copy()}
-          >
-            {copied ? "Copied" : "Copy"}
-          </Button>
-          <button className="button button-primary button-md" disabled={busy} onClick={() => void download("markdown")}>
-            <Download size={16} />
-            Download .md
-          </button>
-        </div>
-      </div>
+    <div className={casesOnly ? "panel-stack case-handoff" : "panel-stack"}>
+      {!casesOnly && (
+        <>
+          <div className="content-heading">
+            <div>
+              <p className="eyebrow">Deterministic handoff</p>
+              <h2>QA coverage brief</h2>
+              <p>Generated from the reviewed local state—not from a fresh AI response.</p>
+            </div>
+            <div className="button-group">
+              <Button
+                variant="secondary"
+                icon={copied ? <Check size={16} /> : <Clipboard size={16} />}
+                disabled={busy}
+                onClick={() => void copy()}
+              >
+                {copied ? "Copied" : "Copy"}
+              </Button>
+              <button className="button button-primary button-md" disabled={busy} onClick={() => void download("markdown")}>
+                <Download size={16} />
+                Download .md
+              </button>
+            </div>
+          </div>
+        </>
+      )}
       {error && (
         <div className="error-banner" role="alert">
           {error}
         </div>
       )}
-      <section className="export-summary">
-        <span>
-          <strong>{item.requirements.filter((value) => value.active).length}</strong> requirements
-        </span>
-        <span>
-          <strong>{item.scenarios.filter((value) => value.review === "accepted" && !value.archived).length}</strong> accepted coverage
-          outputs
-        </span>
-        <span>
-          <strong>{item.questions.filter((value) => value.status === "open").length}</strong> open questions
-        </span>
-      </section>
-      <p>
-        {(item.testCases ?? []).filter((value) => value.review === "accepted" && !value.archived).length} accepted test cases ·{" "}
-        {(item.testCases ?? []).filter((value) => !value.archived && caseNeedsReview(item, value)).length} need scope review. Cases are
-        handoff plans, not execution evidence.
-      </p>
+      {!casesOnly && (
+        <>
+          <section className="export-summary">
+            <span>
+              <strong>{item.requirements.filter((value) => value.active).length}</strong> requirements
+            </span>
+            <span>
+              <strong>{item.scenarios.filter((value) => value.review === "accepted" && !value.archived).length}</strong> accepted coverage
+              outputs
+            </span>
+            <span>
+              <strong>{item.questions.filter((value) => value.status === "open").length}</strong> open questions
+            </span>
+          </section>
+          <p>
+            {(item.testCases ?? []).filter((value) => value.review === "accepted" && !value.archived).length} accepted test cases ·{" "}
+            {(item.testCases ?? []).filter((value) => !value.archived && caseNeedsReview(item, value)).length} need scope review. Cases are
+            handoff plans, not execution evidence.
+          </p>
+        </>
+      )}
+      {casesOnly && (
+        <div>
+          <h2>Export accepted tests</h2>
+          <p>Download the accepted cases from this Testpaq. Drafts and cases needing scope review are excluded.</p>
+        </div>
+      )}
       <section className="handoff-section">
         <div className="content-heading">
           <div>
@@ -172,13 +188,15 @@ export function ExportPanel({
           </table>
         )}
       </section>
-      <section className="markdown-preview">
-        <div className="preview-label">
-          <Eye size={15} />
-          Markdown preview
-        </div>
-        <pre>{markdown}</pre>
-      </section>
+      {!casesOnly && (
+        <section className="markdown-preview">
+          <div className="preview-label">
+            <Eye size={15} />
+            Markdown preview
+          </div>
+          <pre>{markdown}</pre>
+        </section>
+      )}
     </div>
   );
 }

@@ -626,25 +626,35 @@ export function TestpaqWorkbench({
             />
           )}
           {section === "cases" && (
-            <TestCasesPanel
-              item={item}
-              update={update}
-              selectedScenarioId={caseScenarioId}
-              focusedCaseId={focusedCaseId}
-              onFocusHandled={() => setFocusedCaseId(undefined)}
-              onSelect={setCaseScenarioId}
-              onRevisionApplied={() => setDraftNotice("")}
-              onReviewCoverage={(id) => {
-                setCaseScenarioId(id);
-                setSection("review");
-              }}
-              onDraft={(id, targetId) => {
-                setTargetCaseId(targetId);
-                setCaseScenarioId(id);
-                setCaseDraftOpen(true);
-              }}
-              readOnly={item.status === "completed" || Boolean(item.archived)}
-            />
+            <>
+              <TestCasesPanel
+                item={item}
+                update={update}
+                selectedScenarioId={caseScenarioId}
+                focusedCaseId={focusedCaseId}
+                onFocusHandled={() => setFocusedCaseId(undefined)}
+                onSelect={setCaseScenarioId}
+                onRevisionApplied={() => setDraftNotice("")}
+                onReviewCoverage={(id) => {
+                  setCaseScenarioId(id);
+                  setSection("review");
+                }}
+                onDraft={(id, targetId) => {
+                  setTargetCaseId(targetId);
+                  setCaseScenarioId(id);
+                  setCaseDraftOpen(true);
+                }}
+                readOnly={item.status === "completed" || Boolean(item.archived)}
+              />
+              <ExportPanel
+                casesOnly
+                item={item}
+                markdown=""
+                onExport={prepareExport}
+                onExported={recordExport}
+                onBusyChange={setHandoffBusy}
+              />
+            </>
           )}
           {section === "questions" && (
             <QuestionsPanel

@@ -25,8 +25,8 @@
   --violet-soft: #f1edfc;
   --green: #147a52;
   --green-soft: #e7f6ef;
-  --amber: #9a6211;
-  --amber-soft: #fff5dc;
+  --amber: #245a86;
+  --amber-soft: #eaf2fa;
   --red: #b13b4a;
   --red-soft: #fcecef;
   --shadow: 0 12px 36px rgb(24 31 43 / 10%);
@@ -51,8 +51,8 @@
   --violet-soft: #2b2341;
   --green: #5fc49b;
   --green-soft: #15382c;
-  --amber: #e2b85f;
-  --amber-soft: #382d16;
+  --amber: #91bee8;
+  --amber-soft: #192d40;
   --red: #ed8694;
   --red-soft: #401e25;
   --shadow: 0 16px 44px rgb(0 0 0 / 35%);
@@ -1936,4 +1936,9 @@ button:disabled {
 .scope-disclosure ol {
   list-style: decimal;
   padding-left: 24px;
+}
+
+.case-handoff {
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
 }
