@@ -176,9 +176,10 @@ Use resolved answers as clarified context. Do not assume unspecified product beh
 List missing prerequisites and unresolved expected behaviour in unknowns; use an explicit confirmation placeholder where needed.
 Write ordered actions, test data and observable expected results. Preconditions define setup; postconditions define cleanup where supported.
 Several sequential actions belong in one case. Split cases only for meaningful independent conditions or outcomes; avoid exhaustive Cartesian combinations.
-Existing cases are supplied to prevent duplicates. Never return replacements for accepted, rejected, archived or human-edited cases. Return only additional case proposals.
+When targetCaseId is present, return exactly one revised proposal for that existing case using current requirements and resolved answers. Preserve its useful human-authored detail and change only what clarified scope requires. This is a proposal for human comparison, never automatic replacement.
+Otherwise existing cases are supplied to prevent duplicates. Never return replacements for accepted, rejected, archived or human-edited cases. Return only additional case proposals.
 Use stable unique clientIds for new proposals. Do not generate Cypress code, repository changes or execution results.
-Return the required JSON structure only, with up to 30 useful cases. If existing cases already cover the scope, return an empty testCases array.`;
+Return the required JSON structure only, with up to 30 useful cases. Without targetCaseId, if existing cases already cover the scope, return an empty testCases array.`;
 const CASE_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,

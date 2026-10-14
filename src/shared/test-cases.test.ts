@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { makeFixture } from "../../server/fixture";
+import { makeFixture, reviewedFixtureCase } from "../../server/fixture";
 import { TestpaqSchema } from "./domain";
 import { applyGeneratedCases, caseNeedsReview, eligibleCases, newTestCase } from "./test-cases";
 import { renderQaseCsv } from "./qase";
@@ -20,7 +20,7 @@ describe("linked test cases", () => {
   it("adds multiple proposals under one output, preserves decisions and skips exact duplicates", () => {
     const item = makeFixture();
     const parent = item.scenarios[0];
-    const existing = { ...newTestCase(item, parent), review: "accepted" as const };
+    const existing = { ...reviewedFixtureCase(item, parent), review: "accepted" as const };
     item.testCases = [existing];
     const runId = crypto.randomUUID();
     const result = { testCases: [proposal, { ...proposal, clientId: "login", title: "Visibility persists after signing back in" }] };
@@ -38,7 +38,7 @@ describe("linked test cases", () => {
   it("keeps scope review separate from case acceptance and never exports stale or archived coverage", () => {
     const item = makeFixture();
     const parent = item.scenarios[0];
-    item.testCases = [{ ...newTestCase(item, parent), review: "accepted" }];
+    item.testCases = [{ ...reviewedFixtureCase(item, parent), review: "accepted" }];
     expect(eligibleCases(item)).toHaveLength(1);
     parent.destinations.qase = !parent.destinations.qase;
     expect(caseNeedsReview(item, item.testCases[0])).toBe(false);
@@ -47,7 +47,7 @@ describe("linked test cases", () => {
     expect(eligibleCases(item)).toEqual([]);
     expect(renderQaseCsv(item).split("\r\n")).toHaveLength(2);
     const restored = makeFixture();
-    restored.testCases = [{ ...newTestCase(restored, restored.scenarios[0]), review: "accepted" }];
+    restored.testCases = [{ ...reviewedFixtureCase(restored, restored.scenarios[0]), review: "accepted" }];
     restored.scenarios[0].archived = true;
     expect(eligibleCases(restored)).toEqual([]);
     expect(restored.testCases[0].review).toBe("accepted");
@@ -71,8 +71,19 @@ describe("linked test cases", () => {
   });
   it("retains detailed cases during coverage refresh", () => {
     const item = makeFixture();
-    item.testCases = [{ ...newTestCase(item, item.scenarios[0]), review: "accepted" }];
+    item.testCases = [{ ...reviewedFixtureCase(item, item.scenarios[0]), review: "accepted" }];
     const refreshed = applyAnalysis(item, { requirements: [], scenarios: [], questions: [] });
     expect(refreshed.testCases).toEqual(item.testCases);
   });
+});
+it("creates only Manual/Qase defaults from historical parent plans, preserving existing case plans", () => {
+  const item = makeFixture();
+  const parent = item.scenarios[0];
+  parent.destinations = { manual: true, qase: false, automation: true };
+  expect(newTestCase(item, parent).destinations).toEqual({ manual: true, qase: true, automation: false });
+  const existing = { ...newTestCase(item, parent), destinations: { ...parent.destinations } };
+  item.testCases = [existing];
+  const drafted = applyGeneratedCases(item, parent.id, { testCases: [proposal] }, crypto.randomUUID());
+  expect(drafted.testCases![0].destinations).toEqual(existing.destinations);
+  expect(drafted.testCases![1].destinations).toEqual({ manual: true, qase: true, automation: false });
 });

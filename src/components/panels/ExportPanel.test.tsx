@@ -1,7 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { newTestCase } from "../../shared/test-cases";
-import { makeFixture } from "../../../server/fixture";
+import { makeFixture, reviewedFixtureCase } from "../../../server/fixture";
 import { ExportPanel } from "./ExportPanel";
 
 afterEach(() => vi.restoreAllMocks());
@@ -37,7 +36,7 @@ describe("export handoff", () => {
       events.push(this.download);
     });
     const item = makeFixture();
-    item.testCases = [{ ...newTestCase(item, item.scenarios[0]), review: "accepted" }];
+    item.testCases = [{ ...reviewedFixtureCase(item, item.scenarios[0]), review: "accepted" }];
     render(<ExportPanel item={item} markdown="brief" onExport={onExport} onExported={onExported} onBusyChange={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "Download Qase CSV" }));
     await waitFor(() => expect(onExported).toHaveBeenCalledOnce());

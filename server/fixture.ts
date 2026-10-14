@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { Question, Requirement, Scenario, Testpaq } from "../src/shared/domain.js";
 
+import { caseScopeSignature } from "../src/shared/test-cases.js";
+
 const now = () => new Date().toISOString();
 
 export function makeFixture(stress = false): Testpaq {
@@ -153,4 +155,36 @@ function scenario(
 }
 function question(text: string, origin: Question["origin"], status: Question["status"], requirementId?: string): Question {
   return { id: randomUUID(), text, origin, status, requirementId, createdAt: now() };
+}
+
+/** A complete synthetic case for persistence/export regression fixtures. */
+export function reviewedFixtureCase(item: Testpaq, parent: Scenario = item.scenarios[0]) {
+  const stamp = now();
+  return {
+    id: randomUUID(),
+    scenarioId: parent.id,
+    title: parent.title,
+    objective: parent.expectedOutcome,
+    preconditions: "Use a campaign belonging to the signed-in owner.",
+    postconditions: "Restore the original campaign preference.",
+    steps: [
+      {
+        id: randomUUID(),
+        action: `Exercise the behaviour: ${parent.title}`,
+        data: "Synthetic campaign",
+        expectedResult: parent.expectedOutcome,
+      },
+    ],
+    unknowns: [],
+    review: "accepted" as const,
+    origin: "human" as const,
+    destinations: {
+      manual: parent.destinations.manual,
+      qase: parent.destinations.qase || parent.destinations.automation,
+      automation: false,
+    },
+    sourceSignature: caseScopeSignature(item, parent),
+    createdAt: stamp,
+    updatedAt: stamp,
+  };
 }

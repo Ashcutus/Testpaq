@@ -1,9 +1,21 @@
 import { useState } from "react";
+import { archiveLegacyDrafts, retainedDrafts } from "../lib/drafts";
+import { downloadLocalData } from "../lib/workspace";
 import { api } from "../lib/api";
 import { Dialog } from "./ui/Dialog";
 import { Button } from "./ui/Button";
 
-export function WorkspaceSettings({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function WorkspaceSettings({
+  open,
+  onOpenChange,
+  beforeBackup,
+  beforeRestore,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  beforeBackup?: () => Promise<unknown>;
+  beforeRestore?: () => Promise<unknown>;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [file, setFile] = useState<File>();
@@ -11,6 +23,7 @@ export function WorkspaceSettings({ open, onOpenChange }: { open: boolean; onOpe
     setBusy(true);
     setError("");
     try {
+      await beforeBackup?.();
       const data = await api.backup();
       const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
       const anchor = document.createElement("a");
@@ -30,9 +43,11 @@ export function WorkspaceSettings({ open, onOpenChange }: { open: boolean; onOpe
     setError("");
     try {
       if (file.size > 64 * 1024 * 1024) throw new Error("Backup must be smaller than 64 MB.");
-      await api.restore(JSON.parse(await file.text()));
+      const content = JSON.parse(await file.text());
+      await beforeRestore?.();
+      await api.restore(content);
       // Saved drafts refer to the previous workspace and must not overwrite restored data.
-      for (const key of Object.keys(localStorage)) if (key.startsWith("testpaq-draft:")) localStorage.removeItem(key);
+      archiveLegacyDrafts();
       location.hash = "/";
       location.reload();
     } catch (reason) {
@@ -53,7 +68,21 @@ export function WorkspaceSettings({ open, onOpenChange }: { open: boolean; onOpe
       <Button disabled={busy} onClick={() => void backup()}>
         Download workspace backup
       </Button>
-      <p>Backups contain ticket content and history, but never API keys. Store them somewhere you trust.</p>
+      <p>
+        Pending edits in this tab are saved before backup. If saving fails, fix or retry the save first. Backups contain ticket content and
+        history, but never API keys. Store them somewhere you trust.
+      </p>
+      {!!retainedDrafts().length && (
+        <>
+          <Button variant="secondary" disabled={busy} onClick={() => downloadLocalData(retainedDrafts(), "testpaq-draft-recovery.json")}>
+            Download draft recovery file
+          </Button>
+          <p>
+            Retained drafts can belong to earlier workspaces. Inspect the file and copy wanted content manually; they never overwrite
+            restored data automatically.
+          </p>
+        </>
+      )}
       <label className="field">
         <span>Restore a Testpaq backup</span>
         <input type="file" accept=".json,application/json" disabled={busy} onChange={(event) => setFile(event.target.files?.[0])} />

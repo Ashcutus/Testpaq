@@ -2,8 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "./app";
 import { TestpaqStore } from "./store";
-import { makeFixture } from "./fixture";
-import { newTestCase } from "../src/shared/test-cases";
+import { makeFixture, reviewedFixtureCase } from "./fixture";
 import type { AnalysisProvider } from "./provider";
 const result = {
   testCases: [
@@ -24,7 +23,7 @@ const result = {
 function setup(generateCases: NonNullable<AnalysisProvider["generateCases"]>) {
   const store = new TestpaqStore(":memory:");
   const item = makeFixture();
-  item.testCases = [{ ...newTestCase(item, item.scenarios[0]), review: "accepted" }];
+  item.testCases = [{ ...reviewedFixtureCase(item, item.scenarios[0]), review: "accepted" }];
   store.save(item);
   const provider: AnalysisProvider = {
     name: "Fixture",
@@ -58,7 +57,7 @@ describe("case drafting API", () => {
       expect(input.testCases).toEqual(item.testCases);
       expect(input.requirements.every((value) => item.scenarios[0].requirementIds.includes(value.id))).toBe(true);
       const run = store.getRuns(item.id)[0];
-      expect(run).toMatchObject({ status: "succeeded", promptVersion: "testpaq-test-cases-v1", result });
+      expect(run).toMatchObject({ status: "succeeded", promptVersion: "testpaq-test-cases-v2", result });
       expect(run.inputSnapshot).toMatchObject({ scenarioId: request.scenarioId, testCases: item.testCases });
       const backup = store.backup();
       expect(backup.runs[0].result).toEqual(result);
@@ -125,4 +124,34 @@ describe("case drafting API", () => {
       second.store.close();
     }
   });
+});
+
+it("proposes a targeted update without replacing the accepted case and preserves revision context through backup", async () => {
+  const generate = vi.fn<NonNullable<AnalysisProvider["generateCases"]>>(async () => result);
+  const { store, item, send, request } = setup(generate);
+  try {
+    const target = item.testCases![0];
+    expect((await send({ ...request, targetCaseId: crypto.randomUUID() })).status).toBe(400);
+    expect(generate).not.toHaveBeenCalled();
+    expect((await send({ ...request, targetCaseId: target.id })).status).toBe(200);
+    const saved = store.get(item.id)!;
+    expect(saved.testCases![0]).toEqual(target);
+    expect(saved.testCases![1]).toMatchObject({ replacesCaseId: target.id, review: "proposed", destinations: target.destinations });
+    expect(generate.mock.calls[0][0].targetCaseId).toBe(target.id);
+    expect(store.backup().testpaqs[0].testCases![1].replacesCaseId).toBe(target.id);
+  } finally {
+    store.close();
+  }
+});
+it("rejects multiple revisions for one target without mutating the original", async () => {
+  const { store, item, send, request } = setup(async () => ({
+    testCases: [result.testCases[0], { ...result.testCases[0], clientId: "second" }],
+  }));
+  try {
+    expect((await send({ ...request, targetCaseId: item.testCases![0].id })).status).toBe(502);
+    expect(store.get(item.id)).toEqual(item);
+    expect(store.getRuns(item.id)[0].status).toBe("failed");
+  } finally {
+    store.close();
+  }
 });

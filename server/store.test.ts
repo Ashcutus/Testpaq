@@ -57,7 +57,7 @@ it("upgrades a v0.1 database without altering Testpaqs or analysis snapshots", (
     old.close();
     const migrated = new TestpaqStore(path);
     try {
-      expect(migrated.database.pragma("user_version", { simple: true })).toBe(5);
+      expect(migrated.database.pragma("user_version", { simple: true })).toBe(7);
       expect(migrated.get(fixture.id)).toEqual(fixture);
       expect(migrated.listGroups()).toEqual([]);
       expect(migrated.getRuns(fixture.id)[0]).toMatchObject({ errorCode: "interrupted", status: "failed", inputSnapshot });
@@ -144,12 +144,14 @@ it("round trips groups, Testpaqs, history and model preference and rejects inval
     store.finishRun(run.id, { requirements: [], scenarios: [], questions: [] });
     const backup = store.backup();
     restored.restore(backup);
-    expect(restored.get(item.id)).toEqual(item);
+    expect(restored.get(item.id)).toEqual({ ...item, updatedAt: restored.get(item.id)!.updatedAt });
+    expect(restored.get(item.id)!.updatedAt).not.toBe(item.updatedAt);
     expect(restored.listGroups()).toEqual([group]);
     expect(restored.getRuns(item.id)).toEqual(store.getRuns(item.id));
     expect(restored.getSetting("openai_model")).toBe("selected-model");
     expect(() => restored.restore({ ...backup, testpaqs: [{ ...item, groupId: crypto.randomUUID() }] })).toThrow();
-    expect(restored.get(item.id)).toEqual(item);
+    expect(restored.get(item.id)).toEqual({ ...item, updatedAt: restored.get(item.id)!.updatedAt });
+    expect(restored.get(item.id)!.updatedAt).not.toBe(item.updatedAt);
     expect(restored.database.pragma("foreign_key_check")).toEqual([]);
   } finally {
     store.close();
@@ -171,5 +173,56 @@ it("paginates summaries and searches the complete workspace with literal wildcar
     expect(store.list(100, 0, "100% ready_").map((item) => item.id)).toEqual([target.id]);
   } finally {
     store.close();
+  }
+});
+
+it("retains old approval content and historical snapshots when starter approvals need renewed review", () => {
+  const dir = mkdtempSync(join(tmpdir(), "testpaq-authoring-migration-"));
+  const path = join(dir, "testpaq.db");
+  try {
+    const old = new TestpaqStore(path);
+    const item = makeFixture();
+    old.save(item);
+    const badCase = {
+      id: crypto.randomUUID(),
+      scenarioId: item.scenarios[0].id,
+      title: "New test case",
+      objective: item.scenarios[0].expectedOutcome,
+      preconditions: "",
+      postconditions: "",
+      steps: [{ id: crypto.randomUUID(), action: "Describe the action", data: "", expectedResult: "Expected behaviour" }],
+      unknowns: [],
+      review: "accepted",
+      origin: "human",
+      destinations: { manual: true, qase: true, automation: false },
+      sourceSignature: "legacy",
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+    };
+    old.database.prepare("UPDATE testpaqs SET payload=? WHERE id=?").run(JSON.stringify({ ...item, testCases: [badCase] }), item.id);
+    const run = old.startRun({
+      testpaqId: item.id,
+      provider: "fixture",
+      model: "fixture",
+      promptVersion: "v1",
+      disclosure: "fixture",
+      inputHash: "fixture",
+      inputSnapshot: { testpaqId: item.id, ticket: item.ticket, requirements: item.requirements, testCases: [badCase] } as never,
+    });
+    old.finishRun(run.id, { requirements: [], scenarios: [], questions: [] });
+    old.database.pragma("user_version = 6");
+    old.close();
+    const upgraded = new TestpaqStore(path);
+    try {
+      const saved = upgraded.get(item.id)!;
+      expect(saved.testCases![0]).toMatchObject({ title: badCase.title, steps: badCase.steps, review: "proposed" });
+      expect(saved.reviewNotice).toContain("older starter-text approvals");
+      expect(upgraded.getRuns(item.id)[0].inputSnapshot?.testCases![0].review).toBe("accepted");
+      expect(upgraded.database.pragma("user_version", { simple: true })).toBe(7);
+    } finally {
+      upgraded.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

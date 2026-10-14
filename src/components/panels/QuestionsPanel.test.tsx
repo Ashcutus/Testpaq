@@ -30,6 +30,7 @@ describe("question lifecycle", () => {
     expect(state().questions[0]).toMatchObject({ status: "resolved", resolution: "Yes, include team pages." });
     expect(state().questions[0].resolvedAt).toBeTruthy();
     expect(state().requirements).toHaveLength(initialRequirements);
+    fireEvent.click(screen.getByRole("button", { name: "Later" }));
     fireEvent.click(screen.getByRole("button", { name: /Resolved/ }));
     fireEvent.click(screen.getAllByText("Reopen")[0]);
     expect(state().questions[0]).toMatchObject({ status: "open", resolution: "Yes, include team pages." });
@@ -39,7 +40,7 @@ describe("question lifecycle", () => {
     render(<Harness onlyOne onRefresh={refresh} />);
     fireEvent.change(screen.getByLabelText(/^Answer to:/), { target: { value: "Yes." } });
     fireEvent.click(screen.getByText("Save answer"));
-    expect(screen.getByRole("dialog")).toHaveTextContent("Questions answered");
+    expect(screen.getByRole("status", { name: "Question feedback actions" })).toHaveTextContent("Questions answered");
     expect(refresh).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText("Refresh Testpaq"));
     expect(refresh).toHaveBeenCalledOnce();

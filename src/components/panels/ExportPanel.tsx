@@ -1,6 +1,7 @@
 import { Check, Clipboard, Download, Eye } from "lucide-react";
 import { useState } from "react";
 import { caseNeedsReview } from "../../shared/test-cases";
+import { workflowSummary } from "../../shared/workflow";
 import { qaseCases } from "../../shared/qase";
 import type { Testpaq } from "../../shared/domain";
 import { Button } from "../ui/Button";
@@ -14,7 +15,7 @@ export function ExportPanel({
 }: {
   item: Testpaq;
   markdown: string;
-  onExport: (format: "markdown" | "qase") => Promise<string>;
+  onExport: (format: "markdown" | "manual" | "qase") => Promise<string>;
   onExported: () => Promise<void>;
   onBusyChange: (busy: boolean) => void;
 }) {
@@ -41,7 +42,7 @@ export function ExportPanel({
       setWorking(false);
     }
   };
-  const download = async (format: "markdown" | "qase") => {
+  const download = async (format: "markdown" | "manual" | "qase") => {
     try {
       setWorking(true);
       setError("");
@@ -51,7 +52,7 @@ export function ExportPanel({
       );
       const anchor = document.createElement("a");
       anchor.href = href;
-      anchor.download = `${(item.ticket.reference || item.title).toLowerCase().replace(/[^a-z0-9]+/g, "-")}${format === "qase" ? "-qase.csv" : "-qa-coverage.md"}`;
+      anchor.download = `${(item.ticket.reference || item.title).toLowerCase().replace(/[^a-z0-9]+/g, "-")}${format === "qase" ? "-qase.csv" : format === "manual" ? "-manual-cases.md" : "-qa-coverage.md"}`;
       anchor.click();
       setTimeout(() => URL.revokeObjectURL(href), 1000);
       await onExported();
@@ -106,7 +107,23 @@ export function ExportPanel({
         {(item.testCases ?? []).filter((value) => !value.archived && caseNeedsReview(item, value)).length} need scope review. Cases are
         handoff plans, not execution evidence.
       </p>
-      <section className="panel-stack">
+      <section className="handoff-section">
+        <div className="content-heading">
+          <div>
+            <h2>Manual test cases</h2>
+            <p>{workflowSummary(item).manual.length} reviewed, current cases ready for manual handoff.</p>
+          </div>
+          <Button
+            disabled={busy || !workflowSummary(item).manual.length}
+            icon={<Download size={16} />}
+            onClick={() => void download("manual")}
+          >
+            Download manual cases
+          </Button>
+        </div>
+        <p>Includes setup, ordered actions, data and expected results. This handoff records no execution results.</p>
+      </section>
+      <section className="handoff-section">
         <div className="content-heading">
           <div>
             <h2>Qase test cases</h2>
@@ -123,6 +140,11 @@ export function ExportPanel({
           In your Qase project repository, choose Import Data → Qase.io, upload the CSV and select a destination suite. Cases marked To be
           automated import as “To be automated”; other cases as manual. Case IDs are assigned by Qase. Reimporting creates new cases.
         </p>
+        {cases.some((value) => value.destinations.automation) && (
+          <p className="muted">
+            Some cases retain an earlier To be automated plan. Clear and reselect Qase on a case to import it as manual.
+          </p>
+        )}
         {!cases.length && (
           <p>
             Create and accept linked test cases, then select Qase CSV or To be automated on each case. Coverage summaries are not exported

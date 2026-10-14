@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { secureHeaders } from "hono/secure-headers";
 import { z } from "zod";
@@ -19,7 +19,7 @@ import { renderMarkdown } from "../src/shared/export.js";
 import { makeFixture } from "./fixture.js";
 import { OpenAIAnalysisProvider, type AnalysisProvider } from "./provider.js";
 import { BILLING_URL, providerError } from "./provider-errors.js";
-import { applyGeneratedCases } from "../src/shared/test-cases.js";
+import { applyGeneratedCases, scopeQuestions, caseScopeSignature, testCaseContentSignature } from "../src/shared/test-cases.js";
 import { applyAnalysis } from "../src/shared/analysis.js";
 import type { ProviderStatus } from "../src/shared/domain.js";
 import type { TestpaqStore } from "./store.js";
@@ -48,6 +48,16 @@ export function createApp(options: AppOptions) {
   };
   let checking = false;
   const activeAnalyses = new Set<string>();
+  const rejectReplacedWorkspace = (context: Context) => {
+    const supplied = context.req.header("x-testpaq-workspace");
+    if (supplied && supplied !== workspaceGeneration) {
+      context.header("x-testpaq-workspace", workspaceGeneration);
+      return context.json({ error: "Workspace replaced. Retain your draft and reload before editing.", code: "workspace_replaced" }, 409);
+    }
+  };
+
+  let workspaceGeneration = options.store.getSetting("workspace_generation") ?? randomUUID();
+  options.store.setSetting("workspace_generation", workspaceGeneration);
   app.use("*", async (context, next) => {
     const hostname = new URL(context.req.url).hostname;
     if (!["127.0.0.1", "localhost", "[::1]"].includes(hostname)) return context.json({ error: "Host not allowed." }, 403);
@@ -94,6 +104,18 @@ export function createApp(options: AppOptions) {
     await next();
   });
 
+  app.use("/api/*", async (context, next) => {
+    const supplied = context.req.header("x-testpaq-workspace");
+    if (!["GET", "HEAD"].includes(context.req.method) && supplied && supplied !== workspaceGeneration) {
+      context.header("x-testpaq-workspace", workspaceGeneration);
+      return context.json(
+        { error: "The workspace was replaced. Your old draft is retained; reload before editing.", code: "workspace_replaced" },
+        409,
+      );
+    }
+    await next();
+    context.header("x-testpaq-workspace", workspaceGeneration);
+  });
   app.get("/api/config", (context) =>
     context.json({
       provider: provider?.name ?? "OpenAI",
@@ -105,6 +127,8 @@ export function createApp(options: AppOptions) {
   );
   app.patch("/api/provider/model", async (context) => {
     const { model } = z.object({ model: z.string().trim().min(1).max(100) }).parse(await context.req.json());
+    const stale = rejectReplacedWorkspace(context);
+    if (stale) return stale;
     if (checking) return context.json({ error: "Wait for the API access check to finish." }, 409);
     if (provider && !provider.withModel && model !== provider.model)
       return context.json({ error: "This provider does not support model selection." }, 400);
@@ -137,6 +161,8 @@ export function createApp(options: AppOptions) {
     const body = z
       .object({ apiKey: z.string().trim().min(1).max(500).optional(), model: z.string().trim().min(1).max(100).optional() })
       .parse(await context.req.json());
+    const stale = rejectReplacedWorkspace(context);
+    if (stale) return stale;
     if (checking) return context.json({ error: "An API access check is already running." }, 409);
     if (body.model && body.model !== selectedModel) {
       if (provider && !body.apiKey && !provider.withModel)
@@ -180,9 +206,12 @@ export function createApp(options: AppOptions) {
   });
   app.post("/api/workspace/restore", async (context) => {
     const body = await context.req.json();
+    const stale = rejectReplacedWorkspace(context);
+    if (stale) return stale;
     if (activeAnalyses.size || checking)
       return context.json({ error: "Wait for analysis or the access check to finish before restoring." }, 409);
     options.store.restore(body);
+    workspaceGeneration = options.store.getSetting("workspace_generation")!;
     selectedModel = options.store.getSetting("openai_model") ?? process.env.TESTPAQ_OPENAI_MODEL ?? "gpt-5-mini";
     if (provider?.withModel) provider = provider.withModel(selectedModel);
     providerStatus = {
@@ -196,6 +225,8 @@ export function createApp(options: AppOptions) {
   app.get("/api/groups", (context) => context.json(options.store.listGroups()));
   app.post("/api/groups", async (context) => {
     const { name } = GroupBody.parse(await context.req.json());
+    const stale = rejectReplacedWorkspace(context);
+    if (stale) return stale;
     if (options.store.listGroups().some((group) => group.name.toLowerCase() === name.toLowerCase()))
       return context.json({ error: "A group with this name already exists." }, 409);
     return context.json(options.store.saveGroup(name), 201);
@@ -203,6 +234,8 @@ export function createApp(options: AppOptions) {
   app.put("/api/groups/:id", async (context) => {
     const id = context.req.param("id");
     const { name } = GroupBody.parse(await context.req.json());
+    const stale = rejectReplacedWorkspace(context);
+    if (stale) return stale;
     if (!options.store.listGroups().some((group) => group.id === id)) return context.json({ error: "Group not found." }, 404);
     if (options.store.listGroups().some((group) => group.id !== id && group.name.toLowerCase() === name.toLowerCase()))
       return context.json({ error: "A group with this name already exists." }, 409);
@@ -226,10 +259,13 @@ export function createApp(options: AppOptions) {
       .max(300)
       .parse(context.req.query("query") ?? "");
     const group = z.union([z.literal("all"), z.literal("ungrouped"), z.uuid()]).parse(context.req.query("group") ?? "all");
-    return context.json(options.store.list(limit, offset, query, group));
+    const archive = z.enum(["active", "archived", "all"]).parse(context.req.query("archive") ?? "active");
+    return context.json(options.store.list(limit, offset, query, group, archive));
   });
   app.post("/api/testpaqs", async (context) => {
     const body = z.object({ title: z.string().trim().min(1).max(300), groupId: z.uuid().optional() }).parse(await context.req.json());
+    const stale = rejectReplacedWorkspace(context);
+    if (stale) return stale;
     if (body.groupId && !options.store.listGroups().some((group) => group.id === body.groupId))
       return context.json({ error: "Group not found." }, 400);
     const timestamp = new Date().toISOString();
@@ -253,9 +289,12 @@ export function createApp(options: AppOptions) {
   });
   app.put("/api/testpaqs/:id", async (context) => {
     const body = TestpaqSchema.parse(await context.req.json());
+    const stale = rejectReplacedWorkspace(context);
+    if (stale) return stale;
     if (body.id !== context.req.param("id")) return context.json({ error: "ID mismatch." }, 400);
     const existing = options.store.get(body.id);
     if (!existing) return context.json({ error: "Testpaq not found." }, 404);
+    if (existing.archived) return context.json({ error: "Restore this archived Testpaq before editing.", code: "archived_readonly" }, 409);
     if (body.updatedAt !== existing.updatedAt)
       return context.json(
         { error: "This Testpaq changed in another tab. Reload before saving to avoid overwriting changes.", code: "save_conflict" },
@@ -283,6 +322,86 @@ export function createApp(options: AppOptions) {
       }),
     );
   });
+  app.patch("/api/testpaqs/:id/archive", async (context) => {
+    const { archived, updatedAt } = z.object({ archived: z.boolean(), updatedAt: z.iso.datetime() }).parse(await context.req.json());
+    const stale = rejectReplacedWorkspace(context);
+    if (stale) return stale;
+    const item = options.store.get(context.req.param("id"));
+    if (!item) return context.json({ error: "Testpaq not found." }, 404);
+    if (activeAnalyses.has(item.id)) return context.json({ error: "Wait for analysis to finish before archiving." }, 409);
+    if (updatedAt !== item.updatedAt)
+      return context.json({ error: "This Testpaq changed. Reload before archiving.", code: "save_conflict" }, 409);
+    return context.json(
+      options.store.save({ ...item, archived, updatedAt: new Date(Math.max(Date.now(), Date.parse(item.updatedAt) + 1)).toISOString() }),
+    );
+  });
+  app.post("/api/testpaqs/:id/duplicate", (context) => {
+    const original = options.store.get(context.req.param("id"));
+    if (!original) return context.json({ error: "Testpaq not found." }, 404);
+    const item = structuredClone(original),
+      ids = new Map<string, string>();
+    for (const value of [
+      ...item.requirements,
+      ...item.scenarios,
+      ...item.questions,
+      ...(item.testCases ?? []),
+      ...(item.testCases ?? []).flatMap((value) => value.steps),
+    ])
+      ids.set(value.id, randomUUID());
+    const timestamp = new Date().toISOString();
+    item.id = randomUUID();
+    item.copiedFromId = original.id;
+    item.title = `${original.title.slice(0, 290)} (copy)`;
+    item.archived = false;
+    item.status = "in_review";
+    item.createdAt = timestamp;
+    item.updatedAt = timestamp;
+    delete item.completedAt;
+    delete item.exportedAt;
+    delete item.lastRefresh;
+    delete item.lastAnalysedSignature;
+    item.reviewNotice = "Copied coverage and cases start as proposals. Review them before handoff.";
+    for (const value of item.requirements) {
+      value.id = ids.get(value.id)!;
+      value.createdAt = timestamp;
+    }
+    for (const value of item.scenarios) {
+      value.id = ids.get(value.id)!;
+      value.requirementIds = value.requirementIds.map((id) => ids.get(id)!);
+      value.review = "proposed";
+      value.scopeReviewRequired = false;
+      delete value.introducedInRun;
+      delete value.lastChangedInRun;
+      value.createdAt = timestamp;
+      value.updatedAt = timestamp;
+    }
+    for (const value of item.questions) {
+      value.id = ids.get(value.id)!;
+      if (value.requirementId) value.requirementId = ids.get(value.requirementId);
+      if (value.scenarioId) value.scenarioId = ids.get(value.scenarioId);
+    }
+    for (const value of item.testCases ?? []) {
+      value.id = ids.get(value.id)!;
+      value.scenarioId = ids.get(value.scenarioId)!;
+      value.steps.forEach((step) => {
+        step.id = ids.get(step.id)!;
+      });
+      value.review = "proposed";
+      value.sourceSignature = caseScopeSignature(
+        item,
+        item.scenarios.find((parent) => parent.id === value.scenarioId)!,
+      );
+      if (value.replacesCaseId) value.replacesCaseId = ids.get(value.replacesCaseId);
+      delete value.introducedInRun;
+      delete value.lastChangedInRun;
+      value.createdAt = timestamp;
+      value.updatedAt = timestamp;
+    }
+    for (const value of item.testCases ?? [])
+      if (value.replacesCaseId)
+        value.replacesContentSignature = testCaseContentSignature(item.testCases!.find((target) => target.id === value.replacesCaseId)!);
+    return context.json(options.store.save(item), 201);
+  });
   app.delete("/api/testpaqs/:id", (context) =>
     options.store.remove(context.req.param("id")) ? context.body(null, 204) : context.json({ error: "Testpaq not found." }, 404),
   );
@@ -307,10 +426,19 @@ export function createApp(options: AppOptions) {
   });
   app.post("/api/test-cases/draft", async (context) => {
     const request = z
-      .object({ testpaqId: z.uuid(), scenarioId: z.uuid(), updatedAt: z.iso.datetime(), model: z.string().trim().min(1).max(100) })
+      .object({
+        testpaqId: z.uuid(),
+        scenarioId: z.uuid(),
+        targetCaseId: z.uuid().optional(),
+        updatedAt: z.iso.datetime(),
+        model: z.string().trim().min(1).max(100),
+      })
       .parse(await context.req.json());
+    const stale = rejectReplacedWorkspace(context);
+    if (stale) return stale;
     const original = options.store.get(request.testpaqId);
     if (!original) return context.json({ error: "Testpaq not found." }, 404);
+    if (original.archived) return context.json({ error: "Restore this archived Testpaq before analysis." }, 409);
     if (original.status === "completed") return context.json({ error: "Reopen this Testpaq before drafting cases." }, 409);
     if (activeAnalyses.has(original.id)) return context.json({ error: "Analysis is already running for this Testpaq." }, 409);
     if (original.updatedAt !== request.updatedAt)
@@ -320,6 +448,13 @@ export function createApp(options: AppOptions) {
     const parent = original.scenarios.find((value) => value.id === request.scenarioId);
     if (!parent || parent.review !== "accepted" || parent.archived || parent.scopeReviewRequired)
       return context.json({ error: "Choose accepted, current coverage before drafting cases." }, 400);
+    if (
+      request.targetCaseId &&
+      !(original.testCases ?? []).some(
+        (value) => value.id === request.targetCaseId && value.scenarioId === parent.id && !value.archived && !value.replacesCaseId,
+      )
+    )
+      return context.json({ error: "Choose an existing, unarchived case to update." }, 400);
     const currentProvider = provider;
     if (!currentProvider?.generateCases)
       return context.json({ error: "Connect OpenAI to draft test cases. Manual case creation remains available." }, 503);
@@ -327,9 +462,10 @@ export function createApp(options: AppOptions) {
       testpaqId: original.id,
       model: selectedModel,
       scenarioId: parent.id,
+      targetCaseId: request.targetCaseId,
       ticket: original.ticket,
       requirements: original.requirements.filter((value) => parent.requirementIds.includes(value.id)),
-      questions: original.questions,
+      questions: scopeQuestions(original, parent),
       scenarios: [parent],
       testCases: (original.testCases ?? []).filter((value) => value.scenarioId === parent.id),
     });
@@ -337,8 +473,8 @@ export function createApp(options: AppOptions) {
       testpaqId: original.id,
       provider: currentProvider.name,
       model: currentProvider.model,
-      promptVersion: "testpaq-test-cases-v1",
-      disclosure: `Draft cases for ${parent.title}: ticket fields, ${input.requirements.length} linked requirements, ${input.questions?.length ?? 0} questions/answers, one coverage output and ${input.testCases.length} existing linked cases`,
+      promptVersion: "testpaq-test-cases-v2",
+      disclosure: `${request.targetCaseId ? "Propose case update" : "Draft cases"} for ${parent.title}: ticket fields, ${input.requirements.length} linked requirements, ${input.questions?.length ?? 0} questions/answers, one coverage output and ${input.testCases.length} existing linked cases`,
       inputHash: createHash("sha256").update(JSON.stringify(input)).digest("hex"),
       inputSnapshot: input,
     });
@@ -353,7 +489,7 @@ export function createApp(options: AppOptions) {
         return context.json({ error: "The Testpaq changed during drafting. No cases were applied.", code: "analysis_conflict" }, 409);
       }
       const completed = options.store.database.transaction(() => {
-        const item = applyGeneratedCases(latest, parent.id, result, run.id);
+        const item = applyGeneratedCases(latest, parent.id, result, run.id, request.targetCaseId);
         const runRecord = options.store.finishRun(run.id, result);
         options.store.save(item);
         return { item, run: runRecord };
@@ -382,6 +518,8 @@ export function createApp(options: AppOptions) {
 
   app.post("/api/analyse", async (context) => {
     const input = AnalysisInputSchema.parse(await context.req.json());
+    const stale = rejectReplacedWorkspace(context);
+    if (stale) return stale;
     const original = options.store.get(input.testpaqId);
     if (!original) return context.json({ error: "Testpaq not found." }, 404);
     if (activeAnalyses.has(input.testpaqId)) return context.json({ error: "Analysis is already running for this Testpaq." }, 409);
@@ -400,6 +538,7 @@ export function createApp(options: AppOptions) {
         { error: "The selected model changed. Reopen analysis to review the current model.", code: "model_conflict" },
         409,
       );
+    if (original.archived) return context.json({ error: "Restore this archived Testpaq before analysis." }, 409);
     if (original.status === "completed") return context.json({ error: "Reopen this Testpaq before analysing." }, 409);
     const currentProvider = provider;
     const providerName = currentProvider?.name ?? "OpenAI";
