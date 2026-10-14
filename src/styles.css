@@ -1721,3 +1721,219 @@ button:disabled {
     flex-wrap: wrap;
   }
 }
+
+.workflow-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+.workflow-summary button {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 12px;
+  text-align: left;
+}
+.workflow-summary button:hover {
+  border-color: var(--accent);
+}
+.revision-comparison {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.revision-comparison .detail-grid {
+  align-items: start;
+}
+.revision-comparison .recovery-preview {
+  max-height: 400px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.scenario-summary {
+  grid-template-columns: 22px 22px 26px minmax(150px, 1fr) auto auto;
+}
+.review-actions button {
+  width: auto;
+  min-width: 32px;
+  display: inline-flex;
+  gap: 4px;
+  padding: 6px;
+}
+.case-destinations {
+  border: 0;
+  padding: 0;
+  margin: 0 0 12px;
+}
+.case-comparison-details {
+  overflow-wrap: anywhere;
+}
+.case-comparison-details dd {
+  margin: 4px 0 12px;
+}
+.case-comparison-details li {
+  margin-bottom: 12px;
+}
+
+.warning-note {
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 900px) {
+  .scenario-summary {
+    grid-template-columns: 20px 20px 24px minmax(120px, 1fr) auto;
+  }
+  .review-actions {
+    grid-column: 5;
+    grid-row: 1;
+  }
+  .destinations {
+    flex-wrap: wrap;
+  }
+}
+.test-case-card {
+  scroll-margin-top: 110px;
+}
+.case-comparison-details ol {
+  list-style: decimal;
+  padding-left: 24px;
+}
+.handoff-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+@media (max-width: 620px) {
+  .handoff-section .content-heading > div > p:last-child {
+    display: block;
+  }
+  .handoff-section .content-heading {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+}
+.case-browser {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.case-browser-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+}
+.case-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 8px;
+}
+.case-list-item {
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 12px;
+}
+.case-list-item strong,
+.case-list-item span {
+  display: block;
+}
+.case-list-item span {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 5px;
+}
+.case-list-item[aria-current] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.conflict-field {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 12px 0;
+  padding: 12px;
+  min-width: 0;
+}
+.conflict-option {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  overflow-wrap: anywhere;
+}
+.conflict-option:has(input:checked) {
+  border-color: var(--accent);
+}
+.conflict-option > span {
+  font-weight: 650;
+}
+.preserve-lines {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.work-list-entry {
+  border-bottom: 1px solid var(--border);
+}
+.work-row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 16px 8px;
+}
+.archive-view {
+  max-width: 300px;
+  margin-bottom: 12px;
+}
+.feedback-actions {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--surface);
+}
+:root {
+  --muted: #606978;
+  --faint: #626b79;
+  --border-strong: #8993a3;
+  --on-accent: #ffffff;
+}
+:root[data-theme="dark"] {
+  --muted: #b2bac6;
+  --faint: #97a1ae;
+  --border-strong: #687586;
+  --on-accent: #111322;
+}
+.button-primary {
+  color: var(--on-accent);
+}
+:root[data-theme="dark"] .button-danger {
+  color: #111322;
+}
+.field input,
+.field textarea,
+.field select {
+  border-color: var(--border-strong);
+}
+.dialog-footer {
+  flex-wrap: wrap;
+}
+.dialog-footer .button {
+  white-space: normal;
+}
+.scope-disclosure {
+  border: 1px solid var(--border);
+  padding: 16px;
+  border-radius: 8px;
+}
+.scope-disclosure dd {
+  margin: 4px 0 12px;
+}
+.scope-disclosure details {
+  margin: 12px 0;
+}
+.scope-disclosure ol {
+  list-style: decimal;
+  padding-left: 24px;
+}

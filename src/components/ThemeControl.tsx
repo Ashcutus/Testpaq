@@ -4,13 +4,24 @@ import { useEffect, useState } from "react";
 type Theme = "system" | "light" | "dark";
 
 export function ThemeControl() {
-  const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem("testpaq-theme") as Theme) || "system");
+  const [theme, setTheme] = useState<Theme>(() => {
+    try {
+      const saved = localStorage.getItem("testpaq-theme");
+      return saved === "light" || saved === "dark" ? saved : "system";
+    } catch {
+      return "system";
+    }
+  });
   useEffect(() => {
     const query = matchMedia("(prefers-color-scheme: dark)");
     const apply = () => (document.documentElement.dataset.theme = theme === "system" ? (query.matches ? "dark" : "light") : theme);
     apply();
     query.addEventListener("change", apply);
-    localStorage.setItem("testpaq-theme", theme);
+    try {
+      localStorage.setItem("testpaq-theme", theme);
+    } catch {
+      /* Theme remains usable without browser storage. */
+    }
     return () => query.removeEventListener("change", apply);
   }, [theme]);
   const items: Array<[Theme, typeof Sun]> = [

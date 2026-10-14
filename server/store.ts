@@ -5,7 +5,7 @@ import { dirname } from "node:path";
 import {
   WorkspaceBackupSchema,
   type WorkspaceBackup,
-  AnalysisInputSchema,
+  HistoricalAnalysisInputSchema,
   AnalysisRunResultSchema,
   TestpaqSchema,
   type AnalysisRun,
@@ -13,6 +13,7 @@ import {
   type TestpaqSummary,
 } from "../src/shared/domain.js";
 
+import { caseContentIssues, isDraftText, scenarioContentIssues } from "../src/shared/authoring.js";
 import { acquireDatabaseLock } from "./database-lock.js";
 
 type DatabaseInstance = InstanceType<typeof Database>;
@@ -32,9 +33,9 @@ export class TestpaqStore {
       this.database.pragma("foreign_keys = ON");
       this.database.pragma("journal_mode = WAL");
       const version = this.database.pragma("user_version", { simple: true }) as number;
-      if (version > 5) throw new Error("This workspace was created by a newer Testpaq version. Upgrade Testpaq before opening it.");
-      if (existed && version > 0 && version < 5) {
-        const backup = `${path}.before-v03-${Date.now()}-${randomUUID()}.backup`;
+      if (version > 7) throw new Error("This workspace was created by a newer Testpaq version. Upgrade Testpaq before opening it.");
+      if (existed && version > 0 && version < 7) {
+        const backup = `${path}.before-v04-${Date.now()}-${randomUUID()}.backup`;
         this.database.prepare("VACUUM INTO ?").run(backup);
         chmodSync(backup, 0o600);
       }
@@ -116,7 +117,43 @@ export class TestpaqStore {
         this.database.pragma("foreign_keys = ON");
       }
     }
-    if (version < 5) this.database.pragma("user_version = 5");
+    if (version < 7) {
+      this.database.transaction(() => {
+        const rows = this.database.prepare("SELECT payload FROM testpaqs").all() as Array<{ payload: string }>;
+        for (const row of rows) {
+          const item = JSON.parse(row.payload) as Testpaq;
+          let changed = false;
+          for (const value of item.testCases ?? [])
+            if (value.review === "accepted" && caseContentIssues(value).length) {
+              value.review = "proposed";
+              changed = true;
+            }
+          for (const value of item.scenarios)
+            if (value.review === "accepted" && scenarioContentIssues(value).length) {
+              value.review = "proposed";
+              changed = true;
+            }
+          for (const value of item.requirements)
+            if (value.active && isDraftText(value.text, "New requirement")) {
+              value.active = false;
+              changed = true;
+            }
+          for (const value of item.questions)
+            if (value.status === "resolved" && (isDraftText(value.text, "New QA question") || !value.resolution?.trim())) {
+              value.status = "open";
+              delete value.resolvedAt;
+              changed = true;
+            }
+          if (changed) {
+            item.reviewNotice =
+              "Some older starter-text approvals were returned to drafts. All content was retained; finish and review those items before handoff.";
+            item.updatedAt = new Date(Math.max(Date.now(), Date.parse(item.updatedAt) + 1)).toISOString();
+            this.save(item);
+          }
+        }
+        this.database.pragma("user_version = 7");
+      })();
+    }
   }
 
   backup(): WorkspaceBackup {
@@ -140,10 +177,18 @@ export class TestpaqStore {
       this.database.prepare("VACUUM INTO ?").run(snapshot);
       chmodSync(snapshot, 0o600);
     }
+    const oldVersions = new Map(this.list().map((value) => [value.id, value.updatedAt]));
     this.database.transaction(() => {
       this.database.exec("DELETE FROM analysis_runs; DELETE FROM testpaqs; DELETE FROM project_groups; DELETE FROM settings;");
       for (const group of backup.groups) this.saveGroup(group.name, group.id);
-      for (const item of backup.testpaqs) this.save(item);
+      for (const item of backup.testpaqs)
+        this.save({
+          ...item,
+          updatedAt: new Date(
+            Math.max(Date.now(), Date.parse(item.updatedAt) + 1, Date.parse(oldVersions.get(item.id) ?? item.updatedAt) + 1),
+          ).toISOString(),
+        });
+      this.setSetting("workspace_generation", randomUUID());
       const insert = this.database.prepare(
         `INSERT INTO analysis_runs (id,testpaq_id,provider,model,prompt_version,status,disclosure,input_hash,input_snapshot_json,result_json,error_code,created_at,completed_at) VALUES (@id,@testpaqId,@provider,@model,@promptVersion,@status,@disclosure,@inputHash,@inputSnapshot,@result,@errorCode,@createdAt,@completedAt)`,
       );
@@ -198,19 +243,20 @@ export class TestpaqStore {
     })();
   }
 
-  list(limit = -1, offset = 0, query = "", group = "all"): TestpaqSummary[] {
+  list(limit = -1, offset = 0, query = "", group = "all", archive = "all"): TestpaqSummary[] {
     const search = `%${query.toLowerCase().replace(/[\\%_]/g, (value) => `\\${value}`)}%`;
     const rows = this.database
       .prepare(
         `SELECT id,title,reference,status,created_at AS createdAt,updated_at AS updatedAt,
-      json_extract(payload,'$.groupId') AS groupId, json_array_length(payload,'$.scenarios') AS scenarioCount,
+      json_extract(payload,'$.groupId') AS groupId, json_extract(payload,'$.archived') AS archived, json_array_length(payload,'$.scenarios') AS scenarioCount,
       (SELECT count(*) FROM json_each(payload,'$.questions') WHERE json_extract(value,'$.status')='open') AS openQuestionCount
       FROM testpaqs WHERE lower(title || ' ' || reference) LIKE ? ESCAPE '\\'
       AND (?='all' OR (?='ungrouped' AND json_extract(payload,'$.groupId') IS NULL) OR json_extract(payload,'$.groupId')=?)
+      AND (?='all' OR coalesce(json_extract(payload,'$.archived'),0)=?)
       ORDER BY updated_at DESC, id LIMIT ? OFFSET ?`,
       )
-      .all(search, group, group, group, limit, offset) as TestpaqSummary[];
-    return rows.map((row) => ({ ...row, groupId: row.groupId ?? undefined }));
+      .all(search, group, group, group, archive, archive === "archived" ? 1 : 0, limit, offset) as TestpaqSummary[];
+    return rows.map((row) => ({ ...row, archived: Boolean(row.archived), groupId: row.groupId ?? undefined }));
   }
 
   get(id: string): Testpaq | undefined {
@@ -301,7 +347,7 @@ function mapRun(row: Record<string, string | null>): AnalysisRun {
     status: row.status as AnalysisRun["status"],
     disclosure: row.disclosure!,
     inputHash: row.input_hash!,
-    inputSnapshot: row.input_snapshot_json ? AnalysisInputSchema.parse(JSON.parse(row.input_snapshot_json)) : undefined,
+    inputSnapshot: row.input_snapshot_json ? HistoricalAnalysisInputSchema.parse(JSON.parse(row.input_snapshot_json)) : undefined,
     result: row.result_json ? AnalysisRunResultSchema.parse(JSON.parse(row.result_json)) : undefined,
     errorCode: row.error_code ?? undefined,
     createdAt: row.created_at!,

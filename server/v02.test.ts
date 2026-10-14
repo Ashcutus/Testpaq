@@ -1,8 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "./app";
-import { newTestCase } from "../src/shared/test-cases";
-import { makeFixture } from "./fixture";
+import { makeFixture, reviewedFixtureCase } from "./fixture";
 import type { AnalysisProvider } from "./provider";
 import { TestpaqStore } from "./store";
 import type { AnalysisInput, AnalysisResult } from "../src/shared/domain";
@@ -178,7 +177,9 @@ describe("v0.3 workflows", () => {
   it("persists completion and reopening, blocks completed analysis and keeps CSV available", async () => {
     const analyse = vi.fn(async () => empty);
     const { send, app, store, item, input } = setup(fakeProvider(analyse));
-    item.testCases = [{ ...newTestCase(item, item.scenarios[0]), review: "accepted" }];
+    item.testCases = [
+      { ...reviewedFixtureCase(item, item.scenarios[0]), destinations: { ...item.scenarios[0].destinations }, review: "accepted" },
+    ];
     store.save(item);
     const completed = await send(
       `/api/testpaqs/${item.id}`,

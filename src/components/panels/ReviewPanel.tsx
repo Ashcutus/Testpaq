@@ -5,7 +5,6 @@ import {
   ChevronDown,
   ChevronRight,
   Circle,
-  Code2,
   Edit3,
   Plus,
   Save,
@@ -15,6 +14,8 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRememberedState } from "../../lib/remember";
+import { scenarioContentIssues } from "../../shared/authoring";
 import { label } from "../../lib/utils";
 import type { Scenario, Testpaq } from "../../shared/domain";
 import { activeRequirementNumbers } from "../../shared/export";
@@ -25,23 +26,33 @@ export function ReviewPanel({
   update,
   readOnly = false,
   onCases,
+  onAccepted,
+  selectedScenarioId,
 }: {
   item: Testpaq;
   update: (recipe: (item: Testpaq) => Testpaq) => void;
   readOnly?: boolean;
   onCases?: (id: string) => void;
+  onAccepted?: (id: string) => void;
+  selectedScenarioId?: string;
 }) {
-  const [originFilter, setOriginFilter] = useState<Scenario["origin"] | "all">("all");
-  const [reviewFilter, setReviewFilter] = useState<Scenario["review"] | "all">("all");
-  const [coverageFilter, setCoverageFilter] = useState<"all" | "unlinked">("all");
+  const [originFilter, setOriginFilter] = useRememberedState<Scenario["origin"] | "all">(`${item.id}:review-origin`, "all", (value) =>
+    ["all", "explicit", "inferred", "human"].includes(String(value)),
+  );
+  const [reviewFilter, setReviewFilter] = useRememberedState<Scenario["review"] | "all">(`${item.id}:review-status`, "all", (value) =>
+    ["all", "proposed", "accepted", "rejected"].includes(String(value)),
+  );
+  const [coverageFilter, setCoverageFilter] = useRememberedState<"all" | "unlinked">(`${item.id}:review-links`, "all", (value) =>
+    ["all", "unlinked"].includes(String(value)),
+  );
   const [categoryFilter, setCategoryFilter] = useState<Scenario["category"] | "all">("all");
   const [destinationFilter, setDestinationFilter] = useState<"all" | "manual" | "qase" | "automation">("all");
   const [riskOnly, setRiskOnly] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useRememberedState(`${item.id}:review-query`, "", (value) => typeof value === "string" && value.length <= 300);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [focusedId, setFocusedId] = useState<string>();
-  const [expanded, setExpanded] = useState<string>();
+  const [focusedId, setFocusedId] = useState<string | undefined>(selectedScenarioId);
+  const [expanded, setExpanded] = useState<string | undefined>(selectedScenarioId);
   const [undo, setUndo] = useState<{ before: Scenario[]; after: Map<string, string> }>();
   const canUndo =
     !readOnly &&
@@ -58,7 +69,10 @@ export function ReviewPanel({
           (reviewFilter === "all" || scenario.review === reviewFilter) &&
           (coverageFilter === "all" || scenario.requirementIds.length === 0) &&
           (categoryFilter === "all" || scenario.category === categoryFilter) &&
-          (destinationFilter === "all" || scenario.destinations[destinationFilter]) &&
+          (destinationFilter === "all" ||
+            (destinationFilter === "qase"
+              ? scenario.destinations.qase || scenario.destinations.automation
+              : scenario.destinations[destinationFilter])) &&
           (!riskOnly || scenario.risks.length > 0) &&
           `${scenario.title} ${scenario.expectedOutcome}`.toLowerCase().includes(query.toLowerCase()),
       ),
@@ -101,10 +115,14 @@ export function ReviewPanel({
       }
       if (!activeIds.length || readOnly) return;
       const key = event.key.toLowerCase();
-      if (key === "a")
+      if (key === "a") {
+        if (item.scenarios.some((value) => activeIds.includes(value.id) && scenarioContentIssues(value).length)) return;
         mutate(activeIds, (scenario) => {
           scenario.review = "accepted";
         });
+        const accepted = item.scenarios.find((value) => value.id === activeIds[0]);
+        if (activeIds.length === 1 && accepted && !accepted.archived && !accepted.scopeReviewRequired) onAccepted?.(accepted.id);
+      }
       if (key === "r")
         mutate(activeIds, (scenario) => {
           scenario.review = "rejected";
@@ -115,12 +133,10 @@ export function ReviewPanel({
         });
       if (key === "q")
         mutate(activeIds, (scenario) => {
-          scenario.destinations.qase = !scenario.destinations.qase;
+          scenario.destinations.qase = !(scenario.destinations.qase || scenario.destinations.automation);
+          if (!scenario.destinations.qase) scenario.destinations.automation = false;
         });
-      if (key === "c")
-        mutate(activeIds, (scenario) => {
-          scenario.destinations.automation = !scenario.destinations.automation;
-        });
+
       if (key === "e" && activeIds.length === 1) setExpanded(activeIds[0]);
     };
     addEventListener("keydown", handler);
@@ -185,7 +201,7 @@ export function ReviewPanel({
           <label className="search">
             <Search size={15} />
             <span className="sr-only">Search scenarios</span>
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter scenarios…" />
+            <input maxLength={300} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter scenarios…" />
           </label>
           <label className="review-filter">
             <span className="sr-only">Filter by category</span>
@@ -204,7 +220,6 @@ export function ReviewPanel({
               <option value="all">All destinations</option>
               <option value="manual">Manual</option>
               <option value="qase">Qase CSV</option>
-              <option value="automation">To be automated</option>
             </select>
           </label>
           <label className="review-filter">
@@ -252,6 +267,7 @@ export function ReviewPanel({
           <div className="bulkbar">
             <strong>{selected.size} selected</strong>
             <button
+              disabled={item.scenarios.some((value) => selected.has(value.id) && scenarioContentIssues(value).length > 0)}
               onClick={() =>
                 mutate([...selected], (scenario) => {
                   scenario.review = "accepted";
@@ -289,15 +305,6 @@ export function ReviewPanel({
             >
               Qase CSV
             </button>
-            <button
-              onClick={() =>
-                mutate([...selected], (scenario) => {
-                  scenario.destinations.automation = true;
-                })
-              }
-            >
-              To be automated
-            </button>
             <button className="bulk-clear" onClick={() => setSelected(new Set())}>
               Clear
             </button>
@@ -331,6 +338,7 @@ export function ReviewPanel({
               key={scenario.id}
               readOnly={readOnly}
               onCases={onCases}
+              onAccepted={onAccepted}
               scenario={scenario}
               item={item}
               requirementNumbers={requirementNumbers}
@@ -364,6 +372,7 @@ export function ReviewPanel({
 
 function ScenarioRow({
   onCases,
+  onAccepted,
   readOnly,
   scenario,
   item,
@@ -379,6 +388,7 @@ function ScenarioRow({
   mutate,
 }: {
   readOnly: boolean;
+  onAccepted?: (id: string) => void;
   onCases?: (id: string) => void;
   scenario: Scenario;
   item: Testpaq;
@@ -396,10 +406,11 @@ function ScenarioRow({
   const Icon = scenario.origin === "human" ? UserRound : scenario.origin === "inferred" ? Bot : Save;
   const linked = scenario.requirementIds.map((id) => requirementNumbers.get(id)).filter((value): value is number => value !== undefined);
   const hasInactiveLink = linked.length < scenario.requirementIds.length;
-  const patch = (recipe: (value: Scenario) => void) =>
+  const patch = (recipe: (value: Scenario) => void, contentChange = true) =>
     update((draft) => {
       const value = draft.scenarios.find((entry) => entry.id === scenario.id)!;
       recipe(value);
+      if (contentChange) value.review = "proposed";
       value.editedByHumanAt = new Date().toISOString();
       value.updatedAt = new Date().toISOString();
       return draft;
@@ -478,44 +489,40 @@ function ScenarioRow({
           </button>
           <button
             disabled={readOnly}
-            aria-pressed={scenario.destinations.qase}
+            aria-pressed={scenario.destinations.qase || scenario.destinations.automation}
             aria-label="Include in Qase CSV"
             onClick={() =>
               mutate((value) => {
-                value.destinations.qase = !value.destinations.qase;
+                value.destinations.qase = !(value.destinations.qase || value.destinations.automation);
+                if (!value.destinations.qase) value.destinations.automation = false;
               })
             }
           >
             <Circle size={13} />
             Qase CSV
           </button>
-          <button
-            disabled={readOnly}
-            aria-pressed={scenario.destinations.automation}
-            aria-label="To be automated in Qase"
-            onClick={() =>
-              mutate((value) => {
-                value.destinations.automation = !value.destinations.automation;
-              })
-            }
-          >
-            <Code2 size={13} />
-            To be automated
-          </button>
+          {onCases && scenario.review === "accepted" && !scenario.archived && (
+            <Button variant="secondary" size="sm" onClick={() => onCases(scenario.id)}>
+              {(item.testCases ?? []).some((value) => value.scenarioId === scenario.id && !value.archived)
+                ? "Review cases"
+                : "Create cases"}
+            </Button>
+          )}
         </div>
         <div className="review-actions">
           <button
             className="accept"
-            disabled={readOnly}
+            disabled={readOnly || scenarioContentIssues(scenario).length > 0}
             aria-pressed={scenario.review === "accepted"}
             aria-label="Accept scenario"
-            onClick={() =>
+            onClick={() => {
               mutate((value) => {
                 value.review = "accepted";
-              })
-            }
+              });
+              if (!scenario.archived && !scenario.scopeReviewRequired) onAccepted?.(scenario.id);
+            }}
           >
-            <Check size={16} />
+            <Check size={16} /> Accept
           </button>
           <button
             className="reject"
@@ -534,6 +541,7 @@ function ScenarioRow({
       </div>
       {expanded && (
         <div className="scenario-details">
+          {!!scenarioContentIssues(scenario).length && <p className="warning-note">{scenarioContentIssues(scenario).join(" ")}</p>}
           {onCases && (
             <Button variant="secondary" size="sm" onClick={() => onCases(scenario.id)}>
               Review linked test cases ({(item.testCases ?? []).filter((value) => value.scenarioId === scenario.id).length})
@@ -554,7 +562,7 @@ function ScenarioRow({
                 onClick={() =>
                   patch((value) => {
                     value.scopeReviewRequired = false;
-                  })
+                  }, false)
                 }
               >
                 Reviewed current scope

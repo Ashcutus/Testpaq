@@ -49,3 +49,21 @@ it("merges independently added linked cases and requires renewed review of merge
   writeDraft(base, edited);
   expect(readDraft(base.id)?.draft.testCases![0].steps[0].action).toBe("");
 });
+
+it("lets each conflicting field choose the saved or local version while retaining independent edits", () => {
+  const base = makeFixture(),
+    local = structuredClone(base),
+    remote = structuredClone(base);
+  local.ticket.description = "Local description";
+  remote.ticket.description = "Saved description";
+  local.ticket.qaContext = "Independent local context";
+  remote.ticket.reference = "REMOTE-2";
+  const conflict = mergeDraft(base, local, remote);
+  expect(conflict.conflicts).toContain("ticket.description");
+  const resolved = mergeDraft(base, local, remote, { "ticket.description": "saved" });
+  expect(resolved.item.ticket).toMatchObject({
+    description: "Saved description",
+    qaContext: "Independent local context",
+    reference: "REMOTE-2",
+  });
+});

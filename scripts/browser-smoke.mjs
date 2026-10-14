@@ -1,6 +1,6 @@
 /* global document, innerWidth */
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -17,7 +17,22 @@ const directory = mkdtempSync(join(tmpdir(), "testpaq-browser-"));
 const store = new TestpaqStore(join(directory, "testpaq.db"));
 const group = store.saveGroup("Fundraising platform");
 const item = { ...makeFixture(), groupId: group.id };
-item.testCases = [{ ...newTestCase(item, item.scenarios[0]), title: "Owner hides amount", review: "accepted" }];
+item.testCases = [
+  {
+    ...newTestCase(item, item.scenarios[0]),
+    title: "Owner hides amount",
+    destinations: { ...item.scenarios[0].destinations },
+    steps: [
+      {
+        id: crypto.randomUUID(),
+        action: "Choose Hide amount",
+        data: "Campaign owned by signed-in user",
+        expectedResult: "The campaign amount is hidden",
+      },
+    ],
+    review: "accepted",
+  },
+];
 store.save(item);
 store.save({ ...makeFixture(), id: crypto.randomUUID(), title: "Campaign sharing permissions", groupId: group.id });
 const providerFor = (model) => ({
@@ -26,7 +41,7 @@ const providerFor = (model) => ({
   withModel: providerFor,
   listModels: async () => ["gpt-5-mini", "gpt-4.1"],
   checkAccess: async () => undefined,
-  generateCases: async () => ({
+  generateCases: async (input) => ({
     testCases: [
       {
         clientId: "reload",
@@ -61,7 +76,13 @@ const providerFor = (model) => ({
           { action: "Reload the page", data: "", expectedResult: "Amount is still hidden" },
         ],
       },
-    ],
+    ]
+      .slice(0, input.targetCaseId ? 1 : 2)
+      .map((value) =>
+        input.targetCaseId
+          ? { ...value, title: "Clarified campaign visibility case", objective: "Verify the current clarified visibility scope" }
+          : value,
+      ),
   }),
   analyse: async (input) => ({
     requirements: input.requirements
@@ -89,6 +110,7 @@ await new Promise((resolve, reject) => {
 const port = server.address().port;
 const url = `http://127.0.0.1:${port}`;
 let browser;
+let page;
 const gallery = process.argv.includes("--gallery");
 if (gallery) mkdirSync(join(root, "docs/gallery"), { recursive: true });
 try {
@@ -107,7 +129,8 @@ try {
     args: ["--no-sandbox"],
     executablePath: process.env.TESTPAQ_BROWSER_PATH || undefined,
   });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 });
+  page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const capture = async (name) => {
@@ -117,7 +140,7 @@ try {
     }
   };
   await page.goto(url);
-  await page.getByRole("button", { name: /Campaign amount visibility/ }).waitFor();
+  await page.getByRole("button", { name: /^Campaign amount visibility/ }).waitFor();
   await capture("projects");
   await page.goto(`${url}/#/testpaqs/${item.id}`);
   await page.getByLabel("Description").waitFor();
@@ -136,15 +159,18 @@ try {
   await page.getByRole("button", { name: "Accept current scope", exact: true }).click();
   await page.getByRole("button", { name: "Draft test cases with AI", exact: true }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Draft test cases", exact: true }).click();
-  await page.getByRole("button", { name: "Accept case", exact: true }).nth(2).waitFor();
-  assert.equal(await page.locator(".test-case-card").count(), 3);
+  await page.locator(".case-list-item").nth(2).waitFor();
+  assert.equal(await page.locator(".case-list-item").count(), 3);
+  assert.equal(await page.locator(".test-case-card").count(), 1);
   // Existing case stays accepted; newly generated cases require explicit review.
-  await page.getByRole("button", { name: "Accept case", exact: true }).nth(1).click();
-  await page.getByRole("button", { name: "Accept case", exact: true }).nth(2).click();
+  await page.locator(".case-list-item").nth(1).click();
+  await page.getByRole("button", { name: "Accept case", exact: true }).click();
+  await page.locator(".case-list-item").nth(2).click();
+  await page.getByRole("button", { name: "Accept case", exact: true }).click();
   // Keep the detailed generated case visible in the gallery.
-  await page.locator(".test-case-card > summary").first().click();
+  await page.locator(".case-list-item").nth(1).click();
   await capture("test-cases");
-  await page.getByRole("button", { name: "Coverage brief", exact: true }).click();
+  await page.getByRole("button", { name: "Coverage brief & handoff", exact: true }).click();
   await page.getByRole("button", { name: "Download Qase CSV" }).waitFor();
   await capture("qase-export");
   const downloadPending = page.waitForEvent("download");
@@ -159,7 +185,24 @@ try {
   assert.ok(csv.includes("Anonymous reader sees no hidden campaign amount"));
   assert.ok(csv.includes('3. ""Reload the campaign page""'));
   assert.ok(!csv.includes("Keyboard user can find"));
+  const manualPending = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Download manual cases", exact: true }).click();
+  const manualStream = await (await manualPending).createReadStream();
+  let manual = "";
+  for await (const chunk of manualStream) manual += chunk.toString();
+  assert.ok(manual.includes("Owner hides amount"));
+  assert.ok(manual.includes("Expected:"));
+  await page.getByRole("button", { name: /^Test cases/ }).click();
+  await page.locator(".case-list-item").nth(0).click();
+  await page.getByRole("button", { name: "Suggest case update with AI", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Suggest update", exact: true }).click();
+  await page.getByRole("button", { name: "Apply proposed update", exact: true }).waitFor();
+  if (gallery) await page.locator(".revision-comparison").screenshot({ path: join(root, "docs/gallery/case-update.png") });
+  assert.equal(store.get(item.id).testCases[0].title, "Owner hides amount");
+  await page.getByRole("button", { name: "Apply proposed update", exact: true }).click();
+  await page.getByRole("button", { name: "Accept case", exact: true }).first().click();
   await page.getByRole("button", { name: "Mark completed" }).click();
+  await page.getByRole("button", { name: "Complete review", exact: true }).click();
   await page.getByRole("button", { name: "Reopen Testpaq" }).waitFor();
   await page.getByRole("button", { name: "Scenario review", exact: false }).click();
   await page.getByRole("button", { name: "Expand scenario" }).first().click();
@@ -191,6 +234,44 @@ try {
   await page.getByRole("button", { name: "Reopen Testpaq" }).click();
   await page.getByRole("button", { name: "Mark completed" }).waitFor();
   await page.getByRole("button", { name: "Ticket & requirements", exact: true }).click();
+  // Single acceptance offers immediate creation without making an AI request.
+  await page.getByRole("button", { name: /Scenario review/ }).click();
+  const proposalRow = page.locator(".scenario-row.review-proposed").first();
+  await proposalRow.getByRole("button", { name: "Accept scenario", exact: true }).click();
+  await page.getByRole("dialog", { name: "Coverage accepted — create test cases" }).waitFor();
+  await capture("accept-create");
+  await page.getByRole("button", { name: "Add manually", exact: true }).click();
+  await page.getByLabel("Test case title").fill("Manual coverage from accepted suggestion");
+  await page.getByLabel("Action", { exact: true }).fill("Carry out the selected behaviour");
+  await page.getByRole("button", { name: "Accept case", exact: true }).click();
+  assert.equal(await page.getByText("To be automated in Qase", { exact: true }).count(), 0);
+  await page.getByRole("button", { name: "Ticket & requirements", exact: true }).click();
+  await page.getByRole("button", { name: "Add requirement", exact: true }).click();
+  await page
+    .getByLabel(/^Requirement /)
+    .last()
+    .fill("New manual requirement needs coverage");
+  assert.ok(await page.getByRole("button", { name: "Suggest coverage for gaps", exact: true }).isVisible());
+  await page.getByRole("button", { name: /^Questions/ }).click();
+  await page
+    .getByLabel(/^Answer to:/)
+    .first()
+    .fill("Confirmed by Product: test both reader and owner views.");
+  await page.getByRole("button", { name: "Save answer", exact: true }).first().click();
+  await page
+    .getByRole("status", { name: "Question feedback actions" })
+    .getByRole("button", { name: "Review affected cases", exact: true })
+    .click();
+  await page.getByText("Review revised scope", { exact: true }).first().waitFor();
+  await page.getByRole("button", { name: "Coverage brief & handoff", exact: true }).click();
+  assert.ok(await page.getByRole("button", { name: "Download Qase CSV", exact: true }).isDisabled());
+  await page.getByRole("button", { name: /^Test cases/ }).click();
+  for (let index = 0; index < (await page.locator(".case-list-item").count()); index++) {
+    await page.locator(".case-list-item").nth(index).click();
+    if (await page.getByRole("button", { name: "Accept current scope", exact: true }).count())
+      await page.getByRole("button", { name: "Accept current scope", exact: true }).click();
+  }
+  await page.getByRole("button", { name: "Ticket & requirements", exact: true }).click();
   // UI remains usable in dark/mobile layouts.
   await page.getByRole("button", { name: "dark theme" }).click();
   await capture("dark-ticket");
@@ -198,15 +279,93 @@ try {
   await page.getByRole("button", { name: /^Test cases/ }).click();
   assert.ok(await page.getByLabel("Test case title").first().isVisible());
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-  await page.getByRole("button", { name: "Coverage brief", exact: true }).click();
+  await page.getByRole("button", { name: "Coverage brief & handoff", exact: true }).click();
   assert.ok(await page.getByRole("button", { name: "Download Qase CSV" }).isVisible());
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   await capture("mobile-export");
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole("button", { name: "All Testpaqs", exact: true }).click();
+  await page.getByLabel("Search Testpaqs").fill("no match at all");
+  await page.getByRole("heading", { name: "No matching Testpaqs", exact: true }).waitFor();
+  await page.getByLabel("Search Testpaqs").fill("");
+  await page.getByRole("button", { name: `Duplicate ${item.title}`, exact: true }).waitFor();
+  await page.getByRole("button", { name: `Duplicate ${item.title}`, exact: true }).click();
+  await page.getByRole("heading", { name: `${item.title} (copy)`, exact: true }).waitFor();
+  const copy = store.list().find((value) => value.title === `${item.title} (copy)`);
+  assert.ok(copy);
+  assert.ok(store.get(copy.id).testCases.every((value) => value.review === "proposed"));
+  await page.getByRole("button", { name: "All Testpaqs", exact: true }).click();
+  await page.getByRole("button", { name: `Archive ${copy.title}`, exact: true }).click();
+  await page.getByLabel("Workspace view").selectOption("archived");
+  await page.getByRole("button", { name: `Restore ${copy.title}`, exact: true }).waitFor();
+  await page.getByRole("button", { name: `Restore ${copy.title}`, exact: true }).click();
+  await page.getByRole("heading", { name: "No matching Testpaqs", exact: true }).waitFor();
+  await page.getByLabel("Workspace view").selectOption("active");
+  await page
+    .locator(".work-row")
+    .filter({ has: page.getByText(item.title, { exact: true }) })
+    .click();
+  await page.getByRole("button", { name: "Ticket & requirements", exact: true }).click();
+  await page.getByText("Saved locally", { exact: true }).waitFor();
+  const generation = store.getSetting("workspace_generation");
+  const restoreFile = join(directory, "restore.json");
+  writeFileSync(restoreFile, JSON.stringify(store.backup()));
+  const stale = await page.context().newPage();
+  stale.on("pageerror", (error) => errors.push(error.message));
+  await stale.goto(`${url}/#/testpaqs/${item.id}`);
+  await stale.getByLabel("QA context").waitFor();
+  await stale.route("**/api/testpaqs/*", (route) => (route.request().method() === "PUT" ? route.abort("failed") : route.continue()));
+  await stale.getByLabel("QA context").fill("Unsaved stale-tab recovery text");
+  await stale.getByText("Save failed", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Backup / restore", exact: true }).click();
+  await page.getByLabel("Restore a Testpaq backup").setInputFiles(restoreFile);
+  await page.getByRole("button", { name: "Replace workspace with selected backup", exact: true }).click();
+  await page.getByRole("heading", { name: "Testpaqs", exact: true }).waitFor();
+  await page
+    .locator(".work-row")
+    .filter({ has: page.getByText(item.title, { exact: true }) })
+    .click();
+  await page.getByLabel("Description").waitFor();
+  await stale.getByRole("dialog", { name: "Workspace replaced — editing paused" }).waitFor();
+  const recoveryPending = stale.waitForEvent("download");
+  await stale.getByRole("button", { name: "Download retained drafts", exact: true }).click();
+  const recoveryStream = await (await recoveryPending).createReadStream();
+  let recovered = "";
+  for await (const chunk of recoveryStream) recovered += chunk.toString();
+  assert.ok(recovered.includes("Unsaved stale-tab recovery text"));
+  assert.notEqual(store.get(item.id).ticket.qaContext, "Unsaved stale-tab recovery text");
+  await stale.unroute("**/api/testpaqs/*");
+  const denied = await stale.evaluate(
+    async ({ generation, id }) =>
+      (
+        await fetch(`/api/testpaqs/${id}`, {
+          method: "DELETE",
+          headers: { "x-testpaq-session": "browser-fixture-token", "x-testpaq-workspace": generation },
+        })
+      ).status,
+    { generation, id: item.id },
+  );
+  assert.equal(denied, 409);
+  assert.ok(store.get(item.id));
+  await stale.close();
+  await page.getByRole("button", { name: /^Test cases/ }).click();
+  await page.locator(".case-list-item").first().focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await page.getByLabel("Test case title").count(), 1);
+  await page.getByRole("button", { name: "Next case", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await page.getByLabel("Test case title").inputValue(), "Hidden amount stays hidden after reload");
   assert.deepEqual(errors, []);
   console.log(
-    "Browser checks passed: host rejection, autosave/refresh, one-to-many case drafting/review, multi-step Qase download, completion/inspection, model selection, backup, dark/mobile layouts.",
+    "Browser checks passed: host rejection, autosave/refresh, one-to-many case drafting/review, multi-step Qase download, completion/inspection, model selection, backup, accept/create, Manual handoff, targeted revision comparison/application, feedback and new requirement prompts, one focused editor, remembered views, archive/duplicate, cross-tab restore/draft recovery, keyboard and dark/mobile layouts.",
   );
   if (gallery) console.log("Captured gallery in docs/gallery (synthetic data; no external API calls).");
+} catch (error) {
+  if (page) {
+    writeFileSync("/tmp/testpaq-browser-failure.html", await page.content());
+    await page.screenshot({ path: "/tmp/testpaq-browser-failure.png", fullPage: true });
+  }
+  throw error;
 } finally {
   await browser?.close();
   server.closeAllConnections();

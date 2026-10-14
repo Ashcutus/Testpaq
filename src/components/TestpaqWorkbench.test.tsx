@@ -1,7 +1,6 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { newTestCase } from "../shared/test-cases";
-import { makeFixture } from "../../server/fixture";
+import { makeFixture, reviewedFixtureCase } from "../../server/fixture";
 import { api, ApiError } from "../lib/api";
 import type { Testpaq } from "../shared/domain";
 import { TestpaqWorkbench } from "./TestpaqWorkbench";
@@ -130,15 +129,18 @@ describe("workbench persistence", () => {
 
 it("persists completion, keeps export navigation available and reopens for editing", async () => {
   const item = makeFixture();
-  item.testCases = [{ ...newTestCase(item, item.scenarios[0]), review: "accepted" }];
+  item.testCases = [{ ...reviewedFixtureCase(item, item.scenarios[0]), review: "accepted" }];
   vi.mocked(api.save).mockImplementation(async (snapshot) => ({ ...snapshot, updatedAt: "2026-10-01T12:00:01.000Z" }));
   await load(item);
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Mark completed" }));
   });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Complete review" }));
+  });
   expect(vi.mocked(api.save).mock.calls.at(-1)?.[0]).toMatchObject({ status: "completed", completedAt: expect.any(String) });
   expect(screen.getByLabelText("Description")).toBeDisabled();
-  fireEvent.click(screen.getByRole("button", { name: "Coverage brief" }));
+  fireEvent.click(screen.getByRole("button", { name: "Coverage brief & handoff" }));
   expect(screen.getByRole("button", { name: "Download Qase CSV" })).toBeEnabled();
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Reopen Testpaq" }));
@@ -155,8 +157,29 @@ it("does not display completion when saving the transition fails", async () => {
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Mark completed" }));
   });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Complete review" }));
+  });
   expect(screen.getByRole("button", { name: "Mark completed" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Reopen Testpaq" })).not.toBeInTheDocument();
   expect(screen.getByLabelText("Description")).toBeEnabled();
   expect(screen.getByRole("alert")).toHaveTextContent("Database unavailable");
+});
+
+it("offers immediate Manual or AI case creation after accepting a suggestion", async () => {
+  const item = makeFixture();
+  const parent = item.scenarios.find((value) => value.review === "proposed")!;
+  vi.mocked(api.save).mockImplementation(async (snapshot) => snapshot);
+  await load(item);
+  fireEvent.click(screen.getByRole("button", { name: /Scenario review/ }));
+  const row = screen.getAllByRole("listitem").find((value) => value.textContent?.includes(parent.title))!;
+  fireEvent.click(within(row).getByRole("button", { name: "Accept scenario" }));
+  const dialog = within(screen.getByRole("dialog"));
+  expect(dialog.getByRole("button", { name: "Draft with AI" })).toBeEnabled();
+  expect(api.analyse).not.toHaveBeenCalled();
+  fireEvent.click(dialog.getByRole("button", { name: "Add manually" }));
+  expect(screen.getByLabelText("Coverage output")).toHaveValue(parent.id);
+  expect(screen.getByLabelText("Test case title")).toHaveValue("New test case");
+  expect(screen.getByLabelText("Qase CSV")).toBeInTheDocument();
+  expect(screen.queryByLabelText("To be automated in Qase")).not.toBeInTheDocument();
 });

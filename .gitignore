@@ -10,3 +10,13 @@ coverage/
 .env.*
 !.env.example
 
+# Local agent instructions and internal development/investigation notes
+/.local/
+/AGENTS.md
+/CODE_REVIEW*.md
+/DECISIONS.md
+/FORENSIC_REVIEW*.md
+/INVESTIGATION*.md
+/REMEDIATION*.md
+/UI_UX_REVIEW*.md
+/docs/DEVELOPMENT.md

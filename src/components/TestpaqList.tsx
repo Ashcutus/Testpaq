@@ -1,6 +1,7 @@
 import { AlertCircle, ArrowRight, FileText, Plus, Search } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AppConfig } from "../App";
+import { useRememberedState } from "../lib/remember";
 import { api } from "../lib/api";
 import { formatRelative, label } from "../lib/utils";
 import type { TestpaqSummary, ProjectGroup } from "../shared/domain";
@@ -13,13 +14,16 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
   const loadVersion = useRef(0);
   const [items, setItems] = useState<TestpaqSummary[]>([]);
   const [groups, setGroups] = useState<ProjectGroup[]>([]);
-  const [groupFilter, setGroupFilter] = useState("all");
+  const [groupFilter, setGroupFilter] = useRememberedState("workspace-group", "all", (value) => typeof value === "string");
+  const [archiveView, setArchiveView] = useRememberedState("workspace-archive", "active", (value) =>
+    ["active", "archived", "all"].includes(String(value)),
+  );
   const [groupId, setGroupId] = useState("");
   const [groupOpen, setGroupOpen] = useState(false);
   const [groupName, setGroupName] = useState("");
   const [editingGroup, setEditingGroup] = useState<string>();
   const [busy, setBusy] = useState(false);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useRememberedState("workspace-query", "", (value) => typeof value === "string" && value.length <= 300);
   const [newOpen, setNewOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [error, setError] = useState("");
@@ -28,8 +32,12 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
       const version = ++loadVersion.current;
       setLoading(true);
       try {
-        const [nextItems, nextGroups] = await Promise.all([api.list({ offset, query, group: groupFilter }), api.groups()]);
+        const [nextItems, nextGroups] = await Promise.all([
+          api.list({ offset, query, group: groupFilter, archive: archiveView }),
+          api.groups(),
+        ]);
         if (version !== loadVersion.current) return;
+        setError("");
         setItems((previous) => (offset ? [...previous, ...nextItems] : nextItems));
         setGroups(nextGroups);
         setHasMore(nextItems.length === 100);
@@ -39,11 +47,14 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
         if (version === loadVersion.current) setLoading(false);
       }
     },
-    [query, groupFilter],
+    [query, groupFilter, archiveView],
   );
   useEffect(() => {
     const timer = setTimeout(() => void load(), 150);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      loadVersion.current += 1;
+    };
   }, [load]);
   const create = async () => {
     if (!title.trim() || busy) return;
@@ -94,6 +105,30 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
       setGroupId("");
       setGroupOpen(false);
       await load();
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const changeArchive = async (item: TestpaqSummary) => {
+    setBusy(true);
+    setError("");
+    try {
+      await api.archive(item.id, !item.archived, item.updatedAt);
+      await load();
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const duplicate = async (id: string) => {
+    setBusy(true);
+    setError("");
+    try {
+      const copied = await api.duplicate(id);
+      onOpen(copied.id);
     } catch (reason) {
       setError((reason as Error).message);
     } finally {
@@ -158,11 +193,19 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
           </Button>
         )}
       </div>
+      <label className="field archive-view">
+        <span>Workspace view</span>
+        <select value={archiveView} onChange={(event) => setArchiveView(event.target.value)}>
+          <option value="active">Active Testpaqs</option>
+          <option value="archived">Archived Testpaqs</option>
+          <option value="all">All Testpaqs</option>
+        </select>
+      </label>
       <div className="list-toolbar">
         <label className="search">
           <Search size={16} />
           <span className="sr-only">Search Testpaqs</span>
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Testpaqs…" />
+          <input maxLength={300} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Testpaqs…" />
         </label>
         <span>
           {filtered.length} {filtered.length === 1 ? "item" : "items"}
@@ -171,37 +214,60 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
       </div>
       <section className="work-list" aria-label="Recent Testpaqs">
         {filtered.map((item) => (
-          <button className="work-row" key={item.id} onClick={() => onOpen(item.id)}>
-            <span className="work-icon">
-              <FileText size={18} />
-            </span>
-            <span className="work-main">
-              <strong>{item.title}</strong>
-              <span>
-                {groups.find((group) => group.id === item.groupId)?.name || "Ungrouped"} · {item.reference || "No ticket reference"} ·
-                Updated {formatRelative(item.updatedAt)}
+          <div className="work-list-entry" key={item.id}>
+            <button className="work-row" onClick={() => onOpen(item.id)}>
+              <span className="work-icon">
+                <FileText size={18} />
               </span>
-            </span>
-            <span className={`status status-${item.status}`}>{label(item.status)}</span>
-            <span className="count">
-              <strong>{item.scenarioCount}</strong> scenarios
-            </span>
-            <span className={item.openQuestionCount ? "count attention" : "count"}>
-              <strong>{item.openQuestionCount}</strong> open questions
-            </span>
-            <ArrowRight className="row-arrow" size={17} />
-          </button>
+              <span className="work-main">
+                <strong>{item.title}</strong>
+                <span>
+                  {groups.find((group) => group.id === item.groupId)?.name || "Ungrouped"} · {item.reference || "No ticket reference"} ·
+                  Updated {formatRelative(item.updatedAt)}
+                </span>
+              </span>
+              <span className={`status status-${item.status}`}>{item.archived ? "Archived" : label(item.status)}</span>
+              <span className="count">
+                <strong>{item.scenarioCount}</strong> scenarios
+              </span>
+              <span className={item.openQuestionCount ? "count attention" : "count"}>
+                <strong>{item.openQuestionCount}</strong> open questions
+              </span>
+              <ArrowRight className="row-arrow" size={17} />
+            </button>
+            <div className="work-row-actions">
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                aria-label={`Duplicate ${item.title}`}
+                onClick={() => void duplicate(item.id)}
+              >
+                Duplicate
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                aria-label={`${item.archived ? "Restore" : "Archive"} ${item.title}`}
+                onClick={() => void changeArchive(item)}
+              >
+                {item.archived ? "Restore" : "Archive"}
+              </Button>
+            </div>
+          </div>
         ))}
-        {!filtered.length && (
+        {loading && <p role="status">Loading Testpaqs…</p>}
+        {!loading && !filtered.length && (
           <div className="empty-state">
-            <h2>{items.length ? "No matching Testpaqs" : "Start with a product change"}</h2>
+            <h2>{query || groupFilter !== "all" || archiveView !== "active" ? "No matching Testpaqs" : "Start with a product change"}</h2>
             <p>
-              {items.length
+              {query || groupFilter !== "all" || archiveView !== "active"
                 ? "Try a different title or ticket reference."
                 : "Paste a ticket, make its requirements explicit, then review suggested coverage."}
             </p>
             <Button icon={<Plus size={16} />} onClick={openCreate}>
-              Create your first Testpaq
+              {query || groupFilter !== "all" || archiveView !== "active" ? "New Testpaq" : "Create your first Testpaq"}
             </Button>
             {config?.fixturesEnabled && (
               <div className="fixture-actions">
@@ -231,7 +297,7 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
         description="One focused packet of QA work for a product change."
         footer={
           <>
-            <Button variant="ghost" onClick={() => setNewOpen(false)}>
+            <Button variant="ghost" disabled={busy} onClick={() => setNewOpen(false)}>
               Cancel
             </Button>
             <Button onClick={create} disabled={!title.trim() || busy}>
@@ -240,6 +306,11 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
           </>
         }
       >
+        {error && (
+          <p className="error-banner" role="alert">
+            {error}
+          </p>
+        )}
         <label className="field">
           <span>Working title</span>
           <input

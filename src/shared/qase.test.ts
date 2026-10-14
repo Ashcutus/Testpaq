@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { newTestCase } from "./test-cases";
-import { makeFixture } from "../../server/fixture";
+import { makeFixture, reviewedFixtureCase } from "../../server/fixture";
 import { QASE_HEADERS, qaseCases, renderQaseCsv } from "./qase";
 
 // Read RFC 4180 cells independently of the exporter, including embedded newlines.
@@ -31,7 +31,7 @@ function parseCsv(csv: string): string[][] {
 }
 
 describe("Qase native CSV export", () => {
-  it("includes only accepted Qase/Cypress selections, deduplicating dual selections", () => {
+  it("includes only accepted Qase and historical automation selections, deduplicating dual selections", () => {
     const item = makeFixture();
     item.scenarios.forEach((scenario) => {
       scenario.review = "accepted";
@@ -44,9 +44,12 @@ describe("Qase native CSV export", () => {
     item.scenarios[3].review = "proposed";
     item.scenarios[4].destinations.automation = true;
     item.scenarios[4].review = "rejected";
-    item.testCases = item.scenarios
-      .slice(0, 5)
-      .map((parent) => ({ ...newTestCase(item, parent), title: parent.title, review: "accepted" }));
+    item.testCases = item.scenarios.slice(0, 5).map((parent) => ({
+      ...reviewedFixtureCase(item, parent),
+      title: parent.title,
+      destinations: { ...parent.destinations },
+      review: "accepted",
+    }));
     const rows = parseCsv(renderQaseCsv(item));
     expect(rows[0]).toEqual(QASE_HEADERS);
     expect(rows).toHaveLength(4);

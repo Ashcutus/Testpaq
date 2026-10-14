@@ -1,5 +1,7 @@
 import type { AnalysisInput, AnalysisResult, AnalysisRun, Testpaq, TestpaqSummary, ProjectGroup, ProviderStatus } from "../shared/domain";
 
+import { observeWorkspace, workspaceGeneration, workspaceReplaced } from "./workspace";
+
 const token = document.querySelector<HTMLMetaElement>('meta[name="testpaq-session"]')?.content || "dev-session";
 
 export class ApiError extends Error {
@@ -13,21 +15,31 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  if (workspaceReplaced())
+    throw new ApiError("Workspace replaced. Download your retained draft and reload before continuing.", "workspace_replaced");
   const response = await fetch(path, {
     ...init,
     headers: {
+      ...(workspaceGeneration() ? { "x-testpaq-workspace": workspaceGeneration()! } : {}),
       ...(init?.body ? { "content-type": "application/json" } : {}),
       ...(init?.method && init.method !== "GET" ? { "x-testpaq-session": token } : {}),
       ...init?.headers,
     },
   });
+  if (!observeWorkspace(response.headers.get("x-testpaq-workspace")) && path !== "/api/workspace/restore")
+    throw new ApiError("Workspace replaced. Your draft is retained; reload before continuing.", "workspace_replaced");
   if (!response.ok) {
     const body = (await response.json().catch(() => ({ error: response.statusText }))) as {
       error?: string;
       code?: string;
       billingUrl?: string;
+      issues?: Array<{ message: string }>;
     };
-    throw new ApiError(body.error || `Request failed (${response.status}).`, body.code, body.billingUrl);
+    throw new ApiError(
+      [body.error || `Request failed (${response.status}).`, ...(body.issues ?? []).map((issue) => issue.message)].join(" "),
+      body.code,
+      body.billingUrl,
+    );
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
@@ -46,15 +58,18 @@ export const api = {
   renameGroup: (id: string, name: string) => request<ProjectGroup>(`/api/groups/${id}`, { method: "PUT", body: JSON.stringify({ name }) }),
   removeGroup: (id: string) => request<void>(`/api/groups/${id}`, { method: "DELETE" }),
   config: () => request<Config>("/api/config"),
-  list: (options: { offset?: number; query?: string; group?: string } = {}) =>
+  list: (options: { offset?: number; query?: string; group?: string; archive?: string } = {}) =>
     request<TestpaqSummary[]>(
-      `/api/testpaqs?${new URLSearchParams({ offset: String(options.offset ?? 0), query: options.query ?? "", group: options.group ?? "all" })}`,
+      `/api/testpaqs?${new URLSearchParams({ offset: String(options.offset ?? 0), query: options.query ?? "", group: options.group ?? "all", archive: options.archive ?? "active" })}`,
     ),
   get: (id: string) => request<Testpaq>(`/api/testpaqs/${id}`),
   create: (title: string, groupId?: string) =>
     request<Testpaq>("/api/testpaqs", { method: "POST", body: JSON.stringify({ title, groupId }) }),
   save: (item: Testpaq, keepalive = false) =>
     request<Testpaq>(`/api/testpaqs/${item.id}`, { method: "PUT", body: JSON.stringify(item), keepalive }),
+  archive: (id: string, archived: boolean, updatedAt: string) =>
+    request<Testpaq>(`/api/testpaqs/${id}/archive`, { method: "PATCH", body: JSON.stringify({ archived, updatedAt }) }),
+  duplicate: (id: string) => request<Testpaq>(`/api/testpaqs/${id}/duplicate`, { method: "POST" }),
   remove: (id: string) => request<void>(`/api/testpaqs/${id}`, { method: "DELETE" }),
   analyse: (input: AnalysisInput, signal?: AbortSignal) =>
     request<{ result: AnalysisResult; run: AnalysisRun; item: Testpaq }>("/api/analyse", {
@@ -62,8 +77,10 @@ export const api = {
       body: JSON.stringify(input),
       signal,
     }),
-  draftCases: (input: { testpaqId: string; scenarioId: string; updatedAt: string; model: string }, signal?: AbortSignal) =>
-    request<{ item: Testpaq; run: AnalysisRun }>("/api/test-cases/draft", { method: "POST", body: JSON.stringify(input), signal }),
+  draftCases: (
+    input: { testpaqId: string; scenarioId: string; targetCaseId?: string; updatedAt: string; model: string },
+    signal?: AbortSignal,
+  ) => request<{ item: Testpaq; run: AnalysisRun }>("/api/test-cases/draft", { method: "POST", body: JSON.stringify(input), signal }),
   history: (id: string, offset = 0) => request<AnalysisRun[]>(`/api/testpaqs/${id}/history?offset=${offset}`),
   fixture: (kind: "sample" | "stress") => request<Testpaq>(`/api/dev/fixtures/${kind}`, { method: "POST" }),
 };

@@ -1,25 +1,31 @@
 import { CheckCircle2, CircleSlash2, HelpCircle, Plus, RotateCcw } from "lucide-react";
 import { useState } from "react";
+import { isDraftText } from "../../shared/authoring";
 import { label } from "../../lib/utils";
 import type { Question, Testpaq } from "../../shared/domain";
 import { activeRequirementNumbers } from "../../shared/export";
-import { Dialog } from "../ui/Dialog";
+import { useRememberedState } from "../../lib/remember";
 import { Button } from "../ui/Button";
 
 export function QuestionsPanel({
   item,
   update,
   onRefresh,
+  onReviewCases,
   readOnly = false,
 }: {
   item: Testpaq;
   update: (recipe: (item: Testpaq) => Testpaq) => void;
   onRefresh?: () => void;
+  onReviewCases?: (questionId?: string) => void;
   readOnly?: boolean;
 }) {
   const [refreshOpen, setRefreshOpen] = useState(false);
+  const [answeredId, setAnsweredId] = useState<string>();
   const requirementNumbers = activeRequirementNumbers(item);
-  const [filter, setFilter] = useState<Question["status"] | "all">("open");
+  const [filter, setFilter] = useRememberedState<Question["status"] | "all">(`${item.id}:questions-filter`, "open", (value) =>
+    ["all", "open", "resolved", "dismissed"].includes(String(value)),
+  );
   const visible = item.questions.filter((question) => filter === "all" || question.status === filter);
   const add = () =>
     update((draft) => {
@@ -33,11 +39,16 @@ export function QuestionsPanel({
       return draft;
     });
   const setStatus = (id: string, status: Question["status"]) => {
-    if (status === "resolved" && !item.questions.find((value) => value.id === id)?.resolution?.trim()) return;
-    const next = item.questions.map((value) => (value.id === id ? { ...value, status } : value));
-    const answered = next.filter((value) => value.status !== "dismissed");
-    if (status === "resolved" && answered.length && answered.every((value) => value.status === "resolved" && value.resolution?.trim()))
+    if (
+      status === "resolved" &&
+      (!item.questions.find((value) => value.id === id)?.resolution?.trim() ||
+        isDraftText(item.questions.find((value) => value.id === id)!.text, "New QA question"))
+    )
+      return;
+    if (status === "resolved") {
       setRefreshOpen(true);
+      setAnsweredId(id);
+    }
     update((draft) => {
       const question = draft.questions.find((value) => value.id === id)!;
       question.status = status;
@@ -84,6 +95,47 @@ export function QuestionsPanel({
                       : "Testpaq-wide"}
                 </span>
               </div>
+              <label className="field">
+                <span>Question scope</span>
+                <select
+                  aria-label={`Scope for: ${question.text}`}
+                  disabled={readOnly}
+                  value={
+                    question.scenarioId
+                      ? `scenario:${question.scenarioId}`
+                      : question.requirementId
+                        ? `requirement:${question.requirementId}`
+                        : "global"
+                  }
+                  onChange={(event) =>
+                    update((draft) => {
+                      const value = draft.questions.find((entry) => entry.id === question.id)!;
+                      delete value.scenarioId;
+                      delete value.requirementId;
+                      const [kind, id] = event.target.value.split(":");
+                      if (kind === "scenario") value.scenarioId = id;
+                      if (kind === "requirement") value.requirementId = id;
+                      return draft;
+                    })
+                  }
+                >
+                  <option value="global">Whole Testpaq</option>
+                  {item.requirements
+                    .filter((value) => value.active)
+                    .map((value) => (
+                      <option key={value.id} value={`requirement:${value.id}`}>
+                        R{requirementNumbers.get(value.id)}: {value.text}
+                      </option>
+                    ))}
+                  {item.scenarios
+                    .filter((value) => !value.archived)
+                    .map((value) => (
+                      <option key={value.id} value={`scenario:${value.id}`}>
+                        {value.title}
+                      </option>
+                    ))}
+                </select>
+              </label>
               <textarea
                 readOnly={readOnly}
                 rows={2}
@@ -93,7 +145,12 @@ export function QuestionsPanel({
                 value={question.text}
                 onChange={(event) =>
                   update((draft) => {
-                    draft.questions.find((value) => value.id === question.id)!.text = event.target.value;
+                    const value = draft.questions.find((value) => value.id === question.id)!;
+                    value.text = event.target.value;
+                    if (value.status === "resolved") {
+                      value.status = "open";
+                      delete value.resolvedAt;
+                    }
                     return draft;
                   })
                 }
@@ -112,7 +169,7 @@ export function QuestionsPanel({
                     update((draft) => {
                       const value = draft.questions.find((value) => value.id === question.id)!;
                       value.resolution = event.target.value;
-                      if (value.status === "resolved" && !event.target.value.trim()) {
+                      if (value.status === "resolved") {
                         value.status = "open";
                         delete value.resolvedAt;
                       }
@@ -125,7 +182,10 @@ export function QuestionsPanel({
             <div className="question-actions">
               {question.status === "open" ? (
                 <>
-                  <button disabled={readOnly || !question.resolution?.trim()} onClick={() => setStatus(question.id, "resolved")}>
+                  <button
+                    disabled={readOnly || !question.resolution?.trim() || isDraftText(question.text, "New QA question")}
+                    onClick={() => setStatus(question.id, "resolved")}
+                  >
                     <CheckCircle2 size={15} />
                     Save answer
                   </button>
@@ -145,30 +205,38 @@ export function QuestionsPanel({
         ))}
         {!visible.length && <div className="inline-empty">No {filter === "all" ? "" : filter} questions.</div>}
       </div>
-      <Dialog
-        open={refreshOpen}
-        onOpenChange={setRefreshOpen}
-        title="Questions answered"
-        description="All remaining questions have answers. Refresh this Testpaq to include the clarified scope?"
-        footer={
-          <>
+      {refreshOpen && (
+        <section className="feedback-actions" aria-label="Question feedback actions" role="status">
+          <h3>Questions answered</h3>
+          <p>This feedback may change coverage or linked cases. Review the affected scope when ready.</p>
+          <div className="button-group">
             <Button variant="ghost" onClick={() => setRefreshOpen(false)}>
               Later
             </Button>
+            {onReviewCases && (
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setRefreshOpen(false);
+                  onReviewCases(answeredId);
+                }}
+              >
+                Review affected cases
+              </Button>
+            )}
             <Button
+              disabled={!onRefresh}
               onClick={() => {
                 setRefreshOpen(false);
                 onRefresh?.();
               }}
-              disabled={!onRefresh}
             >
               Refresh Testpaq
             </Button>
-          </>
-        }
-      >
-        <p>Your answers are saved locally. You can review the content sent to OpenAI before confirming the refresh.</p>
-      </Dialog>
+          </div>
+          <p>Your answers are saved locally. AI refresh still requires confirmation.</p>
+        </section>
+      )}
     </div>
   );
 }

@@ -1,5 +1,7 @@
+import { isDraftText } from "../../shared/authoring";
 import { ArchiveX, ListChecks, Plus } from "lucide-react";
 import type { Testpaq } from "../../shared/domain";
+import { workflowSummary } from "../../shared/workflow";
 import { label } from "../../lib/utils";
 import { Button } from "../ui/Button";
 
@@ -24,11 +26,12 @@ export function TicketPanel({
         id: crypto.randomUUID(),
         text: "New requirement",
         source: "human",
-        active: true,
+        active: false,
         createdAt: new Date().toISOString(),
       });
       return draft;
     });
+  const gaps = workflowSummary(item).uncovered;
   return (
     <div className="panel-stack">
       <div className="content-heading">
@@ -105,6 +108,21 @@ export function TicketPanel({
             Add requirement
           </Button>
         </div>
+        {!!gaps.length && (
+          <div className="warning-note">
+            <strong>{gaps.length} requirements need accepted, current coverage</strong>
+            <ul>
+              {gaps.map((value) => (
+                <li key={value.id}>
+                  R{item.requirements.indexOf(value) + 1}: {value.text}
+                </li>
+              ))}
+            </ul>
+            <Button variant="secondary" onClick={onAnalyse}>
+              Suggest coverage for gaps
+            </Button>
+          </div>
+        )}
         <div className="requirement-list">
           {item.requirements.map((requirement, index) => (
             <div className={`requirement-row ${!requirement.active ? "is-inactive" : ""}`} key={requirement.id}>
@@ -117,15 +135,23 @@ export function TicketPanel({
                 value={requirement.text}
                 onChange={(event) =>
                   update((draft) => {
-                    draft.requirements[index].text = event.target.value;
+                    const value = draft.requirements[index];
+                    const wasDraft = isDraftText(value.text, "New requirement");
+                    value.text = event.target.value;
+                    if (isDraftText(value.text, "New requirement")) value.active = false;
+                    else if (wasDraft) value.active = true;
                     return draft;
                   })
                 }
               />
+              {isDraftText(requirement.text, "New requirement") && (
+                <span className="attention">Draft requirement: enter testable behaviour to include it in coverage.</span>
+              )}
               {!requirement.text.trim() && <span className="attention">Requirement text is required before saving.</span>}
               <span className="source-label">{label(requirement.source)}</span>
               <button
                 className="icon-button"
+                disabled={isDraftText(requirement.text, "New requirement")}
                 aria-label={requirement.active ? "Reject requirement" : "Restore requirement"}
                 title={requirement.active ? "Reject requirement" : "Restore requirement"}
                 onClick={() =>

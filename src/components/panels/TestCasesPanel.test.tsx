@@ -1,9 +1,9 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { expect, it, vi } from "vitest";
-import { makeFixture } from "../../../server/fixture";
+import { makeFixture, reviewedFixtureCase } from "../../../server/fixture";
 import type { Testpaq } from "../../shared/domain";
-import { newTestCase } from "../../shared/test-cases";
+import { applyGeneratedCases } from "../../shared/test-cases";
 import { TestCasesPanel } from "./TestCasesPanel";
 function Harness({ initial, readOnly = false }: { initial: Testpaq; readOnly?: boolean }) {
   const [item, setItem] = useState(initial);
@@ -25,6 +25,7 @@ it("authors multiple cases under one output and requires review again after chan
   render(<Harness initial={item} />);
   fireEvent.click(screen.getByRole("button", { name: "Add test case" }));
   fireEvent.change(screen.getByLabelText("Test case title"), { target: { value: "Hide and reload" } });
+  fireEvent.change(screen.getByLabelText("Action"), { target: { value: "Hide the campaign amount" } });
   fireEvent.click(screen.getByRole("button", { name: "Add step" }));
   fireEvent.change(screen.getAllByLabelText("Action")[1], { target: { value: "Reload campaign" } });
   fireEvent.change(screen.getAllByLabelText("Expected result")[1], { target: { value: "Amount remains hidden" } });
@@ -57,10 +58,101 @@ it("keeps legacy conversion proposed until missing details are resolved and allo
 });
 it("exposes scope changes and reaccepts a reviewed case against the new scope", () => {
   const item = makeFixture();
-  item.testCases = [{ ...newTestCase(item, item.scenarios[0]), review: "accepted" }];
+  item.testCases = [
+    {
+      ...reviewedFixtureCase(item, item.scenarios[0]),
+      title: "Owner hides amount",
+      steps: [{ id: crypto.randomUUID(), action: "Hide campaign amount", data: "", expectedResult: "Amount hidden" }],
+      review: "accepted",
+    },
+  ];
   item.ticket.description += "Updated scope";
   render(<Harness initial={item} />);
   expect(screen.getByText("Review revised scope")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Accept current scope" }));
   expect(screen.queryByText("Review revised scope")).toBeNull();
+});
+
+it("keeps starter text from being accepted as a finished manual case", () => {
+  render(<Harness initial={makeFixture()} />);
+  fireEvent.click(screen.getByRole("button", { name: "Add test case" }));
+  expect(screen.getByRole("button", { name: "Accept case" })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Test case title"), { target: { value: "Owner hides amount" } });
+  expect(screen.getByRole("button", { name: "Accept case" })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Action"), { target: { value: "Select Hide amount" } });
+  expect(screen.getByRole("button", { name: "Accept case" })).toBeEnabled();
+});
+it("clears historical Qase automation intent when Qase is deselected without changing acceptance", () => {
+  const item = makeFixture();
+  item.testCases = [
+    {
+      ...reviewedFixtureCase(item, item.scenarios[0]),
+      title: "Owner hides amount",
+      review: "accepted",
+      destinations: { manual: true, qase: false, automation: true },
+    },
+  ];
+  render(<Harness initial={item} />);
+  expect(screen.getByLabelText("Qase CSV")).toBeChecked();
+  fireEvent.click(screen.getByLabelText("Qase CSV"));
+  const value = (JSON.parse(screen.getByTestId("state").textContent!) as Testpaq).testCases![0];
+  expect(value).toMatchObject({ review: "accepted", destinations: { manual: true, qase: false, automation: false } });
+});
+
+it("compares and explicitly applies a generated revision before requiring case acceptance again", () => {
+  const item = makeFixture();
+  const original = { ...reviewedFixtureCase(item, item.scenarios[0]), title: "Original owner case", review: "accepted" as const };
+  item.testCases = [original];
+  const proposed = applyGeneratedCases(
+    item,
+    original.scenarioId,
+    {
+      testCases: [
+        {
+          clientId: "revision",
+          title: "Clarified owner case",
+          objective: "Verify clarified visibility",
+          preconditions: "Owner signed in",
+          postconditions: "",
+          steps: [{ action: "Hide amount then reload", data: "Owner campaign", expectedResult: "Amount remains hidden" }],
+          unknowns: [],
+        },
+      ],
+    },
+    crypto.randomUUID(),
+    original.id,
+  );
+  render(<Harness initial={proposed} />);
+  fireEvent.click(screen.getByRole("button", { name: /Clarified owner case.*Proposed update/ }));
+  expect(screen.getByRole("region", { name: "Proposed case update" })).toHaveTextContent("Original owner case");
+  expect(screen.getByRole("region", { name: "Proposed case update" })).toHaveTextContent("Clarified owner case");
+  expect((JSON.parse(screen.getByTestId("state").textContent!) as Testpaq).testCases![0].title).toBe("Original owner case");
+  fireEvent.click(screen.getByRole("button", { name: "Apply proposed update" }));
+  const revised = (JSON.parse(screen.getByTestId("state").textContent!) as Testpaq).testCases!;
+  expect(revised).toHaveLength(1);
+  expect(revised[0]).toMatchObject({
+    id: original.id,
+    title: "Clarified owner case",
+    review: "proposed",
+    destinations: original.destinations,
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Accept case" }));
+  expect((JSON.parse(screen.getByTestId("state").textContent!) as Testpaq).testCases![0].review).toBe("accepted");
+});
+
+it("keeps a single editor while searching, filtering and navigating linked cases", () => {
+  const item = makeFixture();
+  item.testCases = [
+    reviewedFixtureCase(item),
+    { ...reviewedFixtureCase(item), id: crypto.randomUUID(), title: "Anonymous reader view", review: "proposed" },
+  ];
+  render(<Harness initial={item} />);
+  expect(screen.getAllByLabelText("Test case title")).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Next case" }));
+  expect(screen.getByLabelText("Test case title")).toHaveValue("Anonymous reader view");
+  fireEvent.change(screen.getByLabelText("Case review filter"), { target: { value: "accepted" } });
+  expect(screen.getByLabelText("Test case title")).toHaveValue(item.testCases[0].title);
+  fireEvent.change(screen.getByLabelText("Search linked cases"), { target: { value: "nothing matches" } });
+  expect(screen.getByText("No cases match these filters.")).toBeInTheDocument();
+  expect(screen.queryByLabelText("Test case title")).not.toBeInTheDocument();
 });

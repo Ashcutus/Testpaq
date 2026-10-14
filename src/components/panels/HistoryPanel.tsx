@@ -1,10 +1,13 @@
 import { AlertCircle, CheckCircle2, Clock3, LoaderCircle } from "lucide-react";
 import { useEffect, useState } from "react";
+import { Button } from "../ui/Button";
 import { api } from "../../lib/api";
 import { formatRelative, label } from "../../lib/utils";
 import type { AnalysisRun } from "../../shared/domain";
 
 export function HistoryPanel({ testpaqId, version }: { testpaqId: string; version: number }) {
+  const [loading, setLoading] = useState(true);
+  const [retry, setRetry] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
@@ -22,16 +25,20 @@ export function HistoryPanel({ testpaqId, version }: { testpaqId: string; versio
       })
       .catch((reason: Error) => {
         if (active) setError(reason.message);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
       });
     return () => {
       active = false;
     };
-  }, [testpaqId, version]);
+  }, [testpaqId, version, retry]);
   const loadMore = async () => {
     setLoadingMore(true);
     try {
       const more = await api.history(testpaqId, runs.length);
       setRuns((previous) => [...previous, ...more]);
+      setError("");
       setHasMore(more.length === 100);
     } catch (reason) {
       setError((reason as Error).message);
@@ -51,8 +58,18 @@ export function HistoryPanel({ testpaqId, version }: { testpaqId: string; versio
       {error && (
         <div className="error-banner" role="alert">
           {error}
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setLoading(true);
+              setRetry((value) => value + 1);
+            }}
+          >
+            Retry history
+          </Button>
         </div>
       )}
+      {loading && <p role="status">Loading history…</p>}
       <div className="history-list">
         {runs.map((run) => {
           const displayStatus = run.errorCode === "cancelled" ? "cancelled" : run.status;
@@ -69,13 +86,27 @@ export function HistoryPanel({ testpaqId, version }: { testpaqId: string; versio
               </span>
               <div>
                 <strong>
-                  {run.promptVersion.startsWith("testpaq-test-cases") ? "Test case drafting · " : "Coverage analysis · "}
+                  {run.promptVersion.startsWith("testpaq-test-cases")
+                    ? run.inputSnapshot?.targetCaseId
+                      ? "Test case update · "
+                      : "Test case drafting · "
+                    : "Coverage analysis · "}
                   {run.provider} · {run.model}
                 </strong>
                 <span>{run.disclosure}</span>
-                <small>
-                  {run.promptVersion} · Input {run.inputHash.slice(0, 10)}…
-                </small>
+                {run.result && (
+                  <p>
+                    {"testCases" in run.result
+                      ? `${run.result.testCases.length} case proposals prepared for review`
+                      : `${run.result.requirements.length} requirement suggestions · ${run.result.scenarios.length} coverage suggestions · ${run.result.questions.length} questions returned`}
+                  </p>
+                )}
+                <details>
+                  <summary>Run details</summary>
+                  <small>
+                    {run.promptVersion} · Input {run.inputHash.slice(0, 10)}…
+                  </small>
+                </details>
                 {run.errorCode && <small>Error: {label(run.errorCode)}</small>}
                 {run.inputSnapshot && (
                   <details className="history-snapshot">
@@ -137,7 +168,7 @@ export function HistoryPanel({ testpaqId, version }: { testpaqId: string; versio
             </article>
           );
         })}
-        {!runs.length && (
+        {!loading && !error && !runs.length && (
           <div className="inline-empty">
             <Clock3 size={20} /> No analysis runs. Manual use remains fully available.
           </div>
