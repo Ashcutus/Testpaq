@@ -1,4 +1,4 @@
-/* global document, innerWidth */
+/* global document, innerWidth, window */
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -134,9 +134,16 @@ try {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const capture = async (name) => {
-    if (gallery) {
+    if (gallery || process.env.TESTPAQ_SCREENSHOT_DIR) {
       await page.evaluate(() => document.fonts.ready);
-      await page.screenshot({ path: join(root, `docs/gallery/${name}.png`), fullPage: name === "mobile-export" });
+      await page.locator(".save-saving").waitFor({ state: "hidden" });
+      if (name === "mobile-export") await page.evaluate(() => window.scrollTo(0, 0));
+      await page.screenshot({
+        path: process.env.TESTPAQ_SCREENSHOT_DIR
+          ? join(process.env.TESTPAQ_SCREENSHOT_DIR, `${name}.png`)
+          : join(root, `docs/gallery/${name}.png`),
+        fullPage: name === "mobile-export",
+      });
     }
   };
   await page.goto(url);
@@ -152,6 +159,9 @@ try {
   await page.waitForFunction(() => document.querySelector(".save-state")?.textContent?.includes("Saved locally"));
   await page.getByRole("button", { name: "Refresh analysis", exact: true }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Refresh analysis", exact: true }).click();
+  await page.getByRole("button", { name: /^Requirements & questions/ }).waitFor();
+  await capture("requirements");
+  await page.getByRole("button", { name: /Coverage approval/ }).click();
   await page.getByRole("button", { name: "Expand scenario" }).first().waitFor();
   await page.getByRole("button", { name: "Expand scenario" }).first().click();
   await capture("review");
@@ -170,7 +180,8 @@ try {
   // Keep the detailed generated case visible in the gallery.
   await page.locator(".case-list-item").nth(1).click();
   await capture("test-cases");
-  await page.getByRole("heading", { name: "Export accepted tests", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Continue to handoff", exact: true }).click();
+  await page.getByRole("heading", { name: "Manual test cases", exact: true }).waitFor();
   await page.getByRole("button", { name: "Download Qase CSV" }).waitFor();
   const downloadPending = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download Qase CSV" }).click();
@@ -205,7 +216,7 @@ try {
   await page.getByRole("button", { name: "Mark completed" }).click();
   await page.getByRole("button", { name: "Complete review", exact: true }).click();
   await page.getByRole("button", { name: "Reopen Testpaq" }).waitFor();
-  await page.getByRole("button", { name: "Scenario review", exact: false }).click();
+  await page.getByRole("button", { name: "Coverage approval", exact: false }).click();
   await page.getByRole("button", { name: "Expand scenario" }).first().click();
   assert.equal(await page.getByLabel("Scenario title").getAttribute("readonly"), "");
   await capture("completed");
@@ -234,26 +245,30 @@ try {
   await page.getByRole("button", { name: "Close", exact: true }).click();
   await page.getByRole("button", { name: "Reopen Testpaq" }).click();
   await page.getByRole("button", { name: "Mark completed" }).waitFor();
-  await page.getByRole("button", { name: "Ticket & requirements", exact: true }).click();
-  // Single acceptance offers immediate creation without making an AI request.
-  await page.getByRole("button", { name: /Scenario review/ }).click();
+  await page.getByRole("button", { name: "Initial ticket analysis", exact: true }).click();
+  // Approval remains focused; case creation happens in the next stage.
+  await page.getByRole("button", { name: /Coverage approval/ }).click();
   const proposalRow = page.locator(".scenario-row.review-proposed").first();
+  const approvedId = await proposalRow.getAttribute("data-scenario-id");
   await proposalRow.getByRole("button", { name: "Accept scenario", exact: true }).click();
-  await page.getByRole("dialog", { name: "Coverage accepted — create test cases" }).waitFor();
   await capture("accept-create");
-  await page.getByRole("button", { name: "Add manually", exact: true }).click();
+  await page.getByRole("button", { name: "Continue to test cases", exact: true }).click();
+  await page.getByLabel("Coverage output").selectOption(approvedId);
+  await page.getByRole("button", { name: "Add test case", exact: true }).click();
   await page.getByLabel("Test case title").fill("Manual coverage from accepted suggestion");
   await page.getByLabel("Action", { exact: true }).fill("Carry out the selected behaviour");
   await page.getByRole("button", { name: "Accept case", exact: true }).click();
   assert.equal(await page.getByText("To be automated in Qase", { exact: true }).count(), 0);
-  await page.getByRole("button", { name: "Ticket & requirements", exact: true }).click();
+  await page.getByRole("button", { name: "Initial ticket analysis", exact: true }).click();
+  await page.getByRole("button", { name: /^Requirements & questions/ }).click();
   await page.getByRole("button", { name: "Add requirement", exact: true }).click();
   await page
     .getByLabel(/^Requirement /)
     .last()
     .fill("New manual requirement needs coverage");
+  await page.locator(".coverage-details summary").click();
   assert.ok(await page.getByRole("button", { name: "Suggest coverage for gaps", exact: true }).isVisible());
-  await page.getByRole("button", { name: /^Questions/ }).click();
+  await page.getByRole("button", { name: /^Requirements & questions/ }).click();
   await page
     .getByLabel(/^Answer to:/)
     .first()
@@ -272,17 +287,37 @@ try {
     if (await page.getByRole("button", { name: "Accept current scope", exact: true }).count())
       await page.getByRole("button", { name: "Accept current scope", exact: true }).click();
   }
-  await page.getByRole("button", { name: "Ticket & requirements", exact: true }).click();
+  await page.getByRole("button", { name: "Initial ticket analysis", exact: true }).click();
   // UI remains usable in dark/mobile layouts.
   await page.getByRole("button", { name: "dark theme" }).click();
   await capture("dark-ticket");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("button", { name: /^Test cases/ }).click();
   assert.ok(await page.getByLabel("Test case title").first().isVisible());
-  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  assert.ok(
+    await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+    JSON.stringify(
+      await page.evaluate(() =>
+        [...document.querySelectorAll("body *")]
+          .filter((element) => element.getBoundingClientRect().right > innerWidth + 1)
+          .map((element) => ({ tag: element.tagName, class: element.className, right: element.getBoundingClientRect().right }))
+          .slice(-15),
+      ),
+    ),
+  );
   await page.getByRole("button", { name: "Coverage brief & handoff", exact: true }).click();
   assert.ok(await page.getByRole("button", { name: "Download Qase CSV" }).isVisible());
-  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  assert.ok(
+    await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+    JSON.stringify(
+      await page.evaluate(() =>
+        [...document.querySelectorAll("body *")]
+          .filter((element) => element.getBoundingClientRect().right > innerWidth + 1)
+          .map((element) => ({ tag: element.tagName, class: element.className, right: element.getBoundingClientRect().right }))
+          .slice(-15),
+      ),
+    ),
+  );
   await capture("mobile-export");
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole("button", { name: "All Testpaqs", exact: true }).click();
@@ -306,7 +341,7 @@ try {
     .locator(".work-row")
     .filter({ has: page.getByText(item.title, { exact: true }) })
     .click();
-  await page.getByRole("button", { name: "Ticket & requirements", exact: true }).click();
+  await page.getByRole("button", { name: "Initial ticket analysis", exact: true }).click();
   await page.getByText("Saved locally", { exact: true }).waitFor();
   const generation = store.getSetting("workspace_generation");
   const restoreFile = join(directory, "restore.json");
@@ -321,7 +356,7 @@ try {
   await page.getByRole("button", { name: "Backup / restore", exact: true }).click();
   await page.getByLabel("Restore a Testpaq backup").setInputFiles(restoreFile);
   await page.getByRole("button", { name: "Replace workspace with selected backup", exact: true }).click();
-  await page.getByRole("heading", { name: "Testpaqs", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Your workspace", exact: true }).waitFor();
   await page
     .locator(".work-row")
     .filter({ has: page.getByText(item.title, { exact: true }) })
@@ -358,7 +393,7 @@ try {
   assert.equal(await page.getByLabel("Test case title").inputValue(), "Hidden amount stays hidden after reload");
   assert.deepEqual(errors, []);
   console.log(
-    "Browser checks passed: host rejection, autosave/refresh, one-to-many case drafting/review, multi-step Qase download, completion/inspection, model selection, backup, accept/create, Manual handoff, targeted revision comparison/application, feedback and new requirement prompts, one focused editor, remembered views, archive/duplicate, cross-tab restore/draft recovery, keyboard and dark/mobile layouts.",
+    "Browser checks passed: host rejection, autosave/refresh, one-to-many case drafting/review, multi-step Qase download, completion/inspection, model selection, backup, staged approval/create, Manual handoff, targeted revision comparison/application, feedback and new requirement prompts, one focused editor, remembered views, archive/duplicate, cross-tab restore/draft recovery, keyboard and dark/mobile layouts.",
   );
   if (gallery) console.log("Captured gallery in docs/gallery (synthetic data; no external API calls).");
 } catch (error) {

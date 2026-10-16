@@ -18,12 +18,12 @@ Testpaq installs dependencies, builds and opens in your browser. Use the same co
 
 ## A typical review
 
-1. Create a Testpaq and paste your ticket. Organise related work into project groups.
-2. Clarify the requirements yourself or choose **Analyse ticket**. Before AI runs, you see the model and what content will be sent.
-3. Accept, reject or edit the proposed scenarios. Accepting a suggestion offers **Add manually**, **Draft with AI** or **Create later** straight away. Manual and Qase selections on coverage supply defaults for new cases.
-4. Create and review cases with their setup, data, steps and expected results. Select **Manual coverage**, **Qase CSV** or both beside case acceptance. Replace starter text and resolve missing details before accepting.
-5. Answer questions and add requirements as scope develops. Review affected cases or refresh coverage from the offered actions. **Suggest case update with AI** proposes a revision beside the original; apply only after comparing, then accept the revised case.
-6. Use **Coverage brief & handoff** to download Manual cases or Qase CSV. The readiness strip shows gaps, missing cases and reviews still needed. **Mark completed** shows a summary before closing; **Reopen Testpaq** lets you make changes.
+1. Create a Testpaq and use **Initial ticket analysis** to paste the ticket and acceptance criteria. Choose **Analyse ticket** to propose coverage; the model and content disclosure appear before AI runs.
+2. In **Requirements & questions**, confirm the scope and answer open questions. **Select all** lets you approve or decline requirements together; unfinished requirements must be authored before approval.
+3. In **Coverage approval**, approve, decline or edit proposed scenarios. Use **Select all shown** for bulk decisions, then **Continue to test cases**. Manual and Qase selections on coverage supply defaults for new cases.
+4. In **Test cases**, choose coverage, add cases manually or draft them with AI, and select a case from the list. Review its type, setup, numbered actions, expected results and test data. Choose Manual, Qase or both for handoff. Bulk approval is available for complete, current cases; changed scope and proposed revisions need individual review.
+5. As scope develops, review affected cases or refresh coverage. **Suggest case update with AI** proposes a revision beside the original; compare before applying, then accept the revised case.
+6. Use **Coverage brief & handoff** to download Manual cases or Qase CSV. Expand **Review readiness** to inspect gaps and outstanding reviews. **Mark completed** shows a summary before closing; **Reopen Testpaq** lets you make changes.
 
 Completion records your review decision. It does not claim tests have run or passed.
 
@@ -74,17 +74,21 @@ These are screenshots of the running app with synthetic example data. No real cu
 
 ![Project groups and Testpaqs](docs/gallery/projects.png)
 
-### Ticket and requirements
+### Initial ticket analysis
 
-![Ticket with traceable requirements](docs/gallery/ticket.png)
+![Initial ticket analysis](docs/gallery/ticket.png)
 
 ### Review scenarios
 
 ![Scenario review with destinations and provenance](docs/gallery/review.png)
 
-### Accept and create
+### Requirements and questions
 
-![Accept coverage and immediately choose manual or AI case creation](docs/gallery/accept-create.png)
+![Requirements overview with bulk selection](docs/gallery/requirements.png)
+
+### Coverage approval
+
+![Approve coverage before creating cases in the next stage](docs/gallery/accept-create.png)
 
 ### Review a proposed update
 

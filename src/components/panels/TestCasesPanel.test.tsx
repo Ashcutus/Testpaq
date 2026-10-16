@@ -171,3 +171,28 @@ it("accepts the current draft and moves to the next draft without accepting it",
   fireEvent.click(screen.getByRole("button", { name: "Accept case" }));
   expect(screen.getByRole("button", { name: "Case accepted" })).toBeDisabled();
 });
+
+it("requires individual review of incomplete cases before allowing bulk approval", () => {
+  const item = makeFixture();
+  item.testCases = [
+    { ...reviewedFixtureCase(item), title: "Ready case", review: "proposed" },
+    {
+      ...reviewedFixtureCase(item),
+      id: crypto.randomUUID(),
+      title: "Incomplete case",
+      review: "proposed",
+      unknowns: ["Confirm permissions"],
+    },
+  ];
+  render(<Harness initial={item} />);
+  fireEvent.click(screen.getByRole("checkbox", { name: "Select all test cases" }));
+  expect(screen.getByRole("button", { name: "Approve selected cases" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Select case: Incomplete case" }));
+  fireEvent.click(screen.getByRole("button", { name: "Approve selected cases" }));
+  let saved = JSON.parse(screen.getByTestId("state").textContent!) as Testpaq;
+  expect(saved.testCases!.map((value) => value.review)).toEqual(["accepted", "proposed"]);
+  fireEvent.click(screen.getByRole("checkbox", { name: "Select all test cases" }));
+  fireEvent.click(screen.getByRole("button", { name: "Decline selected cases" }));
+  saved = JSON.parse(screen.getByTestId("state").textContent!) as Testpaq;
+  expect(saved.testCases!.every((value) => value.review === "rejected")).toBe(true);
+});

@@ -147,7 +147,7 @@ it("persists completion, keeps export navigation available and reopens for editi
   });
   expect(vi.mocked(api.save).mock.calls.at(-1)?.[0].status).toBe("in_review");
   expect(vi.mocked(api.save).mock.calls.at(-1)?.[0].completedAt).toBeUndefined();
-  fireEvent.click(screen.getByRole("button", { name: "Ticket & requirements" }));
+  fireEvent.click(screen.getByRole("button", { name: "Initial ticket analysis" }));
   expect(screen.getByLabelText("Description")).toBeEnabled();
 });
 
@@ -166,19 +166,20 @@ it("does not display completion when saving the transition fails", async () => {
   expect(screen.getByRole("alert")).toHaveTextContent("Database unavailable");
 });
 
-it("offers immediate Manual or AI case creation after accepting a suggestion", async () => {
+it("keeps approval separate from case creation and provides an explicit next stage", async () => {
   const item = makeFixture();
   const parent = item.scenarios.find((value) => value.review === "proposed")!;
   vi.mocked(api.save).mockImplementation(async (snapshot) => snapshot);
   await load(item);
-  fireEvent.click(screen.getByRole("button", { name: /Scenario review/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Coverage approval/ }));
   const row = screen.getAllByRole("listitem").find((value) => value.textContent?.includes(parent.title))!;
   fireEvent.click(within(row).getByRole("button", { name: "Accept scenario" }));
-  const dialog = within(screen.getByRole("dialog"));
-  expect(dialog.getByRole("button", { name: "Draft with AI" })).toBeEnabled();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(api.analyse).not.toHaveBeenCalled();
-  fireEvent.click(dialog.getByRole("button", { name: "Add manually" }));
+  fireEvent.click(screen.getByRole("button", { name: "Continue to test cases" }));
+  fireEvent.change(screen.getByLabelText("Coverage output"), { target: { value: parent.id } });
   expect(screen.getByLabelText("Coverage output")).toHaveValue(parent.id);
+  fireEvent.click(screen.getByRole("button", { name: "Add test case" }));
   expect(screen.getByLabelText("Test case title")).toHaveValue("New test case");
   expect(screen.getByLabelText("Qase CSV")).toBeInTheDocument();
   expect(screen.queryByLabelText("To be automated in Qase")).not.toBeInTheDocument();
