@@ -1,4 +1,4 @@
-import { AlertCircle, Check, ClipboardList, Clock3, Download, FileInput, HelpCircle, ListChecks, LoaderCircle, Save } from "lucide-react";
+import { AlertCircle, Check, ClipboardList, Clock3, Download, FileInput, ListChecks, LoaderCircle, Save } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AppConfig } from "../App";
 import { api, ApiError } from "../lib/api";
@@ -12,7 +12,7 @@ import { label } from "../lib/utils";
 import { analysisSignature } from "../shared/analysis";
 import { renderQaseCsv } from "../shared/qase";
 import { workflowSummary } from "../shared/workflow";
-import { newTestCase, scopeQuestions } from "../shared/test-cases";
+import { scopeQuestions } from "../shared/test-cases";
 import { renderMarkdown } from "../shared/export";
 import type { Testpaq, ProjectGroup } from "../shared/domain";
 import { TestCasesPanel } from "./panels/TestCasesPanel";
@@ -24,7 +24,7 @@ import { TicketPanel } from "./panels/TicketPanel";
 import { Button } from "./ui/Button";
 import { Dialog } from "./ui/Dialog";
 
-type Section = "ticket" | "review" | "questions" | "cases" | "export" | "history";
+type Section = "ticket" | "overview" | "review" | "questions" | "cases" | "export" | "history";
 
 export function TestpaqWorkbench({
   id,
@@ -45,7 +45,7 @@ export function TestpaqWorkbench({
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [loadedId, setLoadedId] = useState<string>();
   const [section, setSection] = useRememberedState<Section>(`${id}:section`, "ticket", (value) =>
-    ["ticket", "review", "questions", "cases", "export", "history"].includes(String(value)),
+    ["ticket", "overview", "review", "questions", "cases", "export", "history"].includes(String(value)),
   );
   const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
   const [groups, setGroups] = useState<ProjectGroup[]>([]);
@@ -53,7 +53,6 @@ export function TestpaqWorkbench({
   const [error, setError] = useState("");
   const [analysisOpen, setAnalysisOpen] = useState(false);
   const [caseDraftOpen, setCaseDraftOpen] = useState(false);
-  const [acceptedScenarioId, setAcceptedScenarioId] = useState<string>();
   const [targetCaseId, setTargetCaseId] = useState<string>();
   const [completionOpen, setCompletionOpen] = useState(false);
   const [caseScenarioId, setCaseScenarioId] = useRememberedState<string | undefined>(
@@ -342,7 +341,7 @@ export function TestpaqWorkbench({
       setItem(refreshed);
       setSaveState("saved");
       setAnalysisOpen(false);
-      setSection("review");
+      setSection("overview");
       setHistoryVersion((value) => value + 1);
     } catch (reason) {
       if ((reason as Error).name !== "AbortError") {
@@ -440,10 +439,10 @@ export function TestpaqWorkbench({
   const progress = workflowSummary(item);
   const openQuestions = item.questions.filter((question) => question.status === "open").length;
   const tabs: Array<[Section, string, typeof FileInput, number?]> = [
-    ["ticket", "Ticket & requirements", FileInput],
-    ["review", "Scenario review", ClipboardList, item.scenarios.length],
+    ["ticket", "Initial ticket analysis", FileInput],
+    ["overview", "Requirements & questions", ListChecks, openQuestions],
+    ["review", "Coverage approval", ClipboardList, item.scenarios.length],
     ["cases", "Test cases", ListChecks, item.testCases?.length ?? 0],
-    ["questions", "Questions", HelpCircle, openQuestions],
     ["export", "Coverage brief & handoff", Download],
     ["history", "Analysis history", Clock3],
   ];
@@ -458,6 +457,26 @@ export function TestpaqWorkbench({
           </div>
           <h1>{item.title}</h1>
         </div>
+        <label className="field group-assignment">
+          <span>Project group</span>
+          <select
+            disabled={analysing || handoffBusy || item.status === "completed" || item.archived}
+            value={item.groupId || ""}
+            onChange={(event) =>
+              update((draft) => {
+                draft.groupId = event.target.value || undefined;
+                return draft;
+              })
+            }
+          >
+            <option value="">Ungrouped</option>
+            {groups.map((group) => (
+              <option key={group.id} value={group.id}>
+                {group.name}
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="button-group">
           <Button
             variant="secondary"
@@ -503,26 +522,6 @@ export function TestpaqWorkbench({
           </Button>
         </div>
       )}
-      <label className="field group-assignment">
-        <span>Project group</span>
-        <select
-          disabled={analysing || handoffBusy || item.status === "completed" || item.archived}
-          value={item.groupId || ""}
-          onChange={(event) =>
-            update((draft) => {
-              draft.groupId = event.target.value || undefined;
-              return draft;
-            })
-          }
-        >
-          <option value="">Ungrouped</option>
-          {groups.map((group) => (
-            <option key={group.id} value={group.id}>
-              {group.name}
-            </option>
-          ))}
-        </select>
-      </label>
       {item.reviewNotice && <p className="warning-note">{item.reviewNotice}</p>}
       {item.archived && (
         <p className="warning-note">Archived. Restore this Testpaq from All Testpaqs before editing. Exports remain available.</p>
@@ -534,12 +533,18 @@ export function TestpaqWorkbench({
         </p>
       )}
       {item.lastRefresh && (
-        <p className="warning-note">
-          Last refresh: {item.lastRefresh.added.length} added · {item.lastRefresh.changed.length} changed ·{" "}
-          {item.lastRefresh.retained.length} retained.{" "}
-          {item.scenarios.filter((scenario) => scenario.scopeReviewRequired && !scenario.archived).length} accepted scenarios need scope
-          review.
-        </p>
+        <details className="refresh-details">
+          <summary>
+            Last analysis: {item.lastRefresh.added.length} added · {item.lastRefresh.changed.length} changed ·{" "}
+            {item.lastRefresh.retained.length} retained
+          </summary>
+          <p>
+            Last refresh: {item.lastRefresh.added.length} added · {item.lastRefresh.changed.length} changed ·{" "}
+            {item.lastRefresh.retained.length} retained.{" "}
+            {item.scenarios.filter((scenario) => scenario.scopeReviewRequired && !scenario.archived).length} accepted scenarios need scope
+            review.
+          </p>
+        </details>
       )}
       {item.lastAnalysedSignature && item.lastAnalysedSignature !== analysisSignature(item) && (
         <div className="warning-note">
@@ -564,52 +569,67 @@ export function TestpaqWorkbench({
           </Button>
         </div>
       )}
-      <section className="workflow-summary" aria-label="Review readiness">
-        <button onClick={() => setSection("ticket")}>
-          <strong>{progress.uncovered.length}</strong> coverage gap{progress.uncovered.length === 1 ? "" : "s"}
-        </button>
-        <button
-          onClick={() => {
-            setCaseScenarioId(progress.needsCases[0]?.id);
-            setSection("cases");
-          }}
-        >
-          <strong>{progress.needsCases.length}</strong> need cases
-        </button>
-        <button
-          onClick={() => {
-            setCaseScenarioId(progress.scopeReview[0]?.scenarioId);
-            setSection("cases");
-          }}
-        >
-          <strong>{progress.scopeReview.length}</strong> scope changed
-        </button>
-        <button
-          onClick={() => {
-            setCaseScenarioId(progress.proposed[0]?.scenarioId);
-            setSection("cases");
-          }}
-        >
-          <strong>{progress.proposed.length}</strong> case{progress.proposed.length === 1 ? "" : "s"} to review
-        </button>
-        <button onClick={() => setSection("export")}>
-          <strong>{progress.manual.length}</strong> Manual ready · <strong>{progress.qase.length}</strong> Qase ready
-        </button>
-      </section>
+      <details className="workflow-readiness">
+        <summary>
+          Review readiness · {progress.manual.length} Manual ready · {progress.qase.length} Qase ready
+        </summary>
+        <section className="workflow-summary" aria-label="Review readiness">
+          <button onClick={() => setSection("overview")}>
+            <strong>{progress.uncovered.length}</strong> coverage gap{progress.uncovered.length === 1 ? "" : "s"}
+          </button>
+          <button
+            onClick={() => {
+              setCaseScenarioId(progress.needsCases[0]?.id);
+              setSection("cases");
+            }}
+          >
+            <strong>{progress.needsCases.length}</strong> need cases
+          </button>
+          <button
+            onClick={() => {
+              setCaseScenarioId(progress.scopeReview[0]?.scenarioId);
+              setSection("cases");
+            }}
+          >
+            <strong>{progress.scopeReview.length}</strong> scope changed
+          </button>
+          <button
+            onClick={() => {
+              setCaseScenarioId(progress.proposed[0]?.scenarioId);
+              setSection("cases");
+            }}
+          >
+            <strong>{progress.proposed.length}</strong> case{progress.proposed.length === 1 ? "" : "s"} to review
+          </button>
+          <button onClick={() => setSection("export")}>
+            <strong>{progress.manual.length}</strong> Manual ready · <strong>{progress.qase.length}</strong> Qase ready
+          </button>
+        </section>
+      </details>
       <fieldset className="workbench-body" disabled={analysing || handoffBusy} inert={analysing || handoffBusy}>
         <nav className="section-nav" aria-label="Testpaq sections">
           {tabs.map(([value, text, Icon, count]) => (
-            <button key={value} aria-current={section === value ? "page" : undefined} onClick={() => setSection(value)}>
-              <Icon size={16} />
+            <button
+              key={value}
+              aria-current={section === value || (section === "questions" && value === "overview") ? "page" : undefined}
+              onClick={() => setSection(value)}
+            >
+              {value === "history" ? (
+                <Icon size={16} />
+              ) : (
+                <span className="stage-number" aria-hidden="true">
+                  {tabs.findIndex(([key]) => key === value) + 1}
+                </span>
+              )}
               <span>{text}</span>
-              {count !== undefined && <em>{count}</em>}
+              {count !== undefined && <em aria-hidden="true">{count}</em>}
             </button>
           ))}
         </nav>
         <section className="workbench-content">
           {section === "ticket" && (
             <fieldset className="editing-panels" disabled={item.status === "completed" || item.archived}>
-              <TicketPanel item={item} update={update} onAnalyse={() => setAnalysisOpen(true)} />
+              <TicketPanel view="ticket" item={item} update={update} onAnalyse={() => setAnalysisOpen(true)} />
             </fieldset>
           )}
           {section === "review" && (
@@ -617,7 +637,6 @@ export function TestpaqWorkbench({
               item={item}
               update={update}
               readOnly={item.status === "completed" || Boolean(item.archived)}
-              onAccepted={setAcceptedScenarioId}
               selectedScenarioId={caseScenarioId}
               onCases={(id) => {
                 setCaseScenarioId(id);
@@ -626,52 +645,48 @@ export function TestpaqWorkbench({
             />
           )}
           {section === "cases" && (
-            <>
-              <TestCasesPanel
-                item={item}
-                update={update}
-                selectedScenarioId={caseScenarioId}
-                focusedCaseId={focusedCaseId}
-                onFocusHandled={() => setFocusedCaseId(undefined)}
-                onSelect={setCaseScenarioId}
-                onRevisionApplied={() => setDraftNotice("")}
-                onReviewCoverage={(id) => {
-                  setCaseScenarioId(id);
-                  setSection("review");
-                }}
-                onDraft={(id, targetId) => {
-                  setTargetCaseId(targetId);
-                  setCaseScenarioId(id);
-                  setCaseDraftOpen(true);
-                }}
-                readOnly={item.status === "completed" || Boolean(item.archived)}
-              />
-              <ExportPanel
-                casesOnly
-                item={item}
-                markdown=""
-                onExport={prepareExport}
-                onExported={recordExport}
-                onBusyChange={setHandoffBusy}
-              />
-            </>
-          )}
-          {section === "questions" && (
-            <QuestionsPanel
+            <TestCasesPanel
               item={item}
               update={update}
-              onRefresh={() => setAnalysisOpen(true)}
-              onReviewCases={(questionId) => {
-                setCaseScenarioId(
-                  progress.scopeReview.find((value) => {
-                    const parent = item.scenarios.find((entry) => entry.id === value.scenarioId);
-                    return parent && scopeQuestions(item, parent).some((question) => question.id === questionId);
-                  })?.scenarioId ?? progress.scopeReview[0]?.scenarioId,
-                );
-                setSection("cases");
+              selectedScenarioId={caseScenarioId}
+              focusedCaseId={focusedCaseId}
+              onFocusHandled={() => setFocusedCaseId(undefined)}
+              onSelect={setCaseScenarioId}
+              onRevisionApplied={() => setDraftNotice("")}
+              onReviewCoverage={(id) => {
+                setCaseScenarioId(id);
+                setSection("review");
+              }}
+              onDraft={(id, targetId) => {
+                setTargetCaseId(targetId);
+                setCaseScenarioId(id);
+                setCaseDraftOpen(true);
               }}
               readOnly={item.status === "completed" || Boolean(item.archived)}
             />
+          )}
+          {(section === "overview" || section === "questions") && (
+            <>
+              <fieldset className="editing-panels" disabled={item.status === "completed" || item.archived}>
+                <TicketPanel view="requirements" item={item} update={update} onAnalyse={() => setAnalysisOpen(true)} />
+              </fieldset>
+
+              <QuestionsPanel
+                item={item}
+                update={update}
+                onRefresh={() => setAnalysisOpen(true)}
+                onReviewCases={(questionId) => {
+                  setCaseScenarioId(
+                    progress.scopeReview.find((value) => {
+                      const parent = item.scenarios.find((entry) => entry.id === value.scenarioId);
+                      return parent && scopeQuestions(item, parent).some((question) => question.id === questionId);
+                    })?.scenarioId ?? progress.scopeReview[0]?.scenarioId,
+                  );
+                  setSection("cases");
+                }}
+                readOnly={item.status === "completed" || Boolean(item.archived)}
+              />
+            </>
           )}
           {section === "export" && (
             <ExportPanel
@@ -683,62 +698,43 @@ export function TestpaqWorkbench({
             />
           )}
           {section === "history" && <HistoryPanel testpaqId={item.id} version={historyVersion} />}
+          {!["export", "history"].includes(section) && (
+            <div className="stage-footer">
+              <span>
+                {section === "ticket"
+                  ? "Next: confirm the requirements and answer open questions."
+                  : section === "overview" || section === "questions"
+                    ? "Next: approve or decline the proposed coverage."
+                    : section === "review"
+                      ? "Next: write and review cases for approved coverage."
+                      : "Next: review inclusion and download your handoff."}
+              </span>
+              <Button
+                variant="secondary"
+                onClick={() =>
+                  setSection(
+                    section === "ticket"
+                      ? "overview"
+                      : section === "overview" || section === "questions"
+                        ? "review"
+                        : section === "review"
+                          ? "cases"
+                          : "export",
+                  )
+                }
+              >
+                {section === "ticket"
+                  ? "Review requirements"
+                  : section === "overview" || section === "questions"
+                    ? "Review coverage"
+                    : section === "review"
+                      ? "Continue to test cases"
+                      : "Continue to handoff"}
+              </Button>
+            </div>
+          )}
         </section>
       </fieldset>
-      <Dialog
-        open={Boolean(acceptedScenarioId)}
-        onOpenChange={(open) => {
-          if (!open) setAcceptedScenarioId(undefined);
-        }}
-        title="Coverage accepted — create test cases"
-        description="Choose how to turn this suggestion into detailed cases. You can select Manual, Qase or both on each case."
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setAcceptedScenarioId(undefined)}>
-              Create later
-            </Button>
-            <Button
-              variant="secondary"
-              onClick={() => {
-                const parent = item.scenarios.find((value) => value.id === acceptedScenarioId);
-                if (!parent) return;
-                update((draft) => {
-                  draft.testCases ??= [];
-                  const created = newTestCase(draft, parent);
-                  draft.testCases.push(created);
-                  setFocusedCaseId(created.id);
-                  return draft;
-                });
-                setDraftNotice("");
-                setCaseScenarioId(parent.id);
-                setSection("cases");
-                setAcceptedScenarioId(undefined);
-              }}
-              disabled={(item.testCases?.length ?? 0) >= 3000}
-            >
-              Add manually
-            </Button>
-            <Button
-              onClick={() => {
-                setCaseScenarioId(acceptedScenarioId);
-                setTargetCaseId(undefined);
-                setAcceptedScenarioId(undefined);
-                setSection("cases");
-                setCaseDraftOpen(true);
-              }}
-              disabled={!config?.configured || (item.testCases?.length ?? 0) >= 3000}
-            >
-              Draft with AI
-            </Button>
-          </>
-        }
-      >
-        <p>{item.scenarios.find((value) => value.id === acceptedScenarioId)?.title}</p>
-        <p>AI drafting starts only after you review and confirm the content disclosure.</p>
-        {!config?.configured && (
-          <p className="warning-note">Connect OpenAI from the top bar to use AI. Manual creation is available now.</p>
-        )}
-      </Dialog>
       <Dialog
         open={completionOpen}
         onOpenChange={setCompletionOpen}

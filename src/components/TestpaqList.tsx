@@ -144,8 +144,8 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
       <section className="page-heading">
         <div>
           <p className="eyebrow">QA change review</p>
-          <h1>Testpaqs</h1>
-          <p>Turn product intent into reviewed, traceable coverage.</p>
+          <h1>Your workspace</h1>
+          <p>Start with a ticket. Clarify the scope, approve coverage and build your test cases.</p>
         </div>
         <Button icon={<Plus size={16} />} onClick={openCreate}>
           New Testpaq
@@ -157,50 +157,77 @@ export function TestpaqList({ config, onOpen }: { config?: AppConfig; onOpen: (i
           {error}
         </div>
       )}
-      <div className="group-toolbar">
-        <label className="field">
-          <span>Project group</span>
-          <select value={groupFilter} onChange={(event) => setGroupFilter(event.target.value)}>
-            <option value="all">All groups</option>
-            <option value="ungrouped">Ungrouped</option>
-            {groups.map((group) => (
-              <option key={group.id} value={group.id}>
-                {group.name}
-              </option>
-            ))}
+      <section className="workspace-guide" aria-label="How Testpaq works">
+        <div>
+          <span>1</span>
+          <strong>Analyse a ticket</strong>
+          <p>Paste the description and acceptance criteria.</p>
+        </div>
+        <div>
+          <span>2</span>
+          <strong>Confirm the scope</strong>
+          <p>Review requirements and answer questions.</p>
+        </div>
+        <div>
+          <span>3</span>
+          <strong>Approve coverage</strong>
+          <p>Choose the behaviours that need testing.</p>
+        </div>
+        <div>
+          <span>4</span>
+          <strong>Create test cases</strong>
+          <p>Review steps, then export to Manual or Qase.</p>
+        </div>
+      </section>
+      <div className="workspace-filters">
+        <div className="group-toolbar">
+          <label className="field">
+            <span>Project group</span>
+            <select value={groupFilter} onChange={(event) => setGroupFilter(event.target.value)}>
+              <option value="all">All groups</option>
+              <option value="ungrouped">Ungrouped</option>
+              {groups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <details className="group-options">
+            <summary>Manage groups</summary>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setEditingGroup(undefined);
+                setGroupName("");
+                setGroupOpen(true);
+              }}
+            >
+              New group
+            </Button>
+            {groups.some((group) => group.id === groupFilter) && (
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setEditingGroup(groupFilter);
+                  setGroupName(groups.find((group) => group.id === groupFilter)!.name);
+                  setGroupOpen(true);
+                }}
+              >
+                Manage group
+              </Button>
+            )}
+          </details>
+        </div>
+        <label className="field archive-view">
+          <span>Workspace view</span>
+          <select value={archiveView} onChange={(event) => setArchiveView(event.target.value)}>
+            <option value="active">Active Testpaqs</option>
+            <option value="archived">Archived Testpaqs</option>
+            <option value="all">All Testpaqs</option>
           </select>
         </label>
-        <Button
-          variant="secondary"
-          onClick={() => {
-            setEditingGroup(undefined);
-            setGroupName("");
-            setGroupOpen(true);
-          }}
-        >
-          New group
-        </Button>
-        {groups.some((group) => group.id === groupFilter) && (
-          <Button
-            variant="ghost"
-            onClick={() => {
-              setEditingGroup(groupFilter);
-              setGroupName(groups.find((group) => group.id === groupFilter)!.name);
-              setGroupOpen(true);
-            }}
-          >
-            Manage group
-          </Button>
-        )}
       </div>
-      <label className="field archive-view">
-        <span>Workspace view</span>
-        <select value={archiveView} onChange={(event) => setArchiveView(event.target.value)}>
-          <option value="active">Active Testpaqs</option>
-          <option value="archived">Archived Testpaqs</option>
-          <option value="all">All Testpaqs</option>
-        </select>
-      </label>
       <div className="list-toolbar">
         <label className="search">
           <Search size={16} />
