@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { isDraftText } from "../../shared/authoring";
-import { ArchiveX, ListChecks, Plus } from "lucide-react";
+import { ArchiveX, Plus } from "lucide-react";
 import type { Testpaq } from "../../shared/domain";
 import { workflowSummary } from "../../shared/workflow";
 import { label } from "../../lib/utils";
@@ -9,12 +9,10 @@ import { Button } from "../ui/Button";
 export function TicketPanel({
   item,
   update,
-  onAnalyse,
   view = "all",
 }: {
   item: Testpaq;
   update: (recipe: (item: Testpaq) => Testpaq) => void;
-  onAnalyse: () => void;
   view?: "all" | "ticket" | "requirements";
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -53,12 +51,9 @@ export function TicketPanel({
           <p>
             {view === "requirements"
               ? "Choose the requirements in scope, then resolve the questions below."
-              : "Paste the source ticket and analyse it to propose requirements, questions and coverage."}
+              : "Paste the source ticket, then choose Analyse when you want requirements, questions or coverage proposed."}
           </p>
         </div>
-        <Button icon={<ListChecks size={16} />} onClick={onAnalyse}>
-          {item.scenarios.length || item.lastAnalysedSignature ? "Refresh analysis" : "Analyse ticket"}
-        </Button>
       </div>
       {view !== "requirements" && (
         <section className="editor-section ticket-grid">
@@ -171,9 +166,6 @@ export function TicketPanel({
                   </li>
                 ))}
               </ul>
-              <Button variant="secondary" onClick={onAnalyse}>
-                Suggest coverage for gaps
-              </Button>
             </details>
           )}
           <div className="requirement-list">
@@ -199,7 +191,7 @@ export function TicketPanel({
                   aria-invalid={!requirement.text.trim()}
                   aria-label={`Requirement ${index + 1}`}
                   maxLength={4000}
-                  rows={2}
+                  rows={1}
                   value={requirement.text}
                   onChange={(event) =>
                     update((draft) => {
@@ -233,7 +225,7 @@ export function TicketPanel({
                 </button>
               </div>
             ))}
-            {!item.requirements.length && <div className="inline-empty">No requirements yet. Add them manually or analyse the ticket.</div>}
+            {!item.requirements.length && <div className="inline-empty">No requirements yet. Add them manually or use Analyse.</div>}
           </div>
         </section>
       )}

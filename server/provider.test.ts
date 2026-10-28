@@ -11,10 +11,71 @@ vi.mock("openai", () => ({
   },
 }));
 import { OpenAIAnalysisProvider } from "./provider";
-import { makeFixture } from "./fixture";
+import { makeFixture, reviewedFixtureCase } from "./fixture";
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+it("preserves conflicting answer scope and existing-case review, archive and freshness decisions", async () => {
+  const item = makeFixture();
+  const [first, second] = item.scenarios;
+  const questions = [first, second].map((scenario, index) => ({
+    id: crypto.randomUUID(),
+    text: "Which role?",
+    resolution: index ? "Administrator" : "Owner",
+    scenarioId: scenario.id,
+    origin: "human" as const,
+    status: "resolved" as const,
+    createdAt: new Date().toISOString(),
+  }));
+  const existing = reviewedFixtureCase({ ...item, questions }, first);
+  mocks.create.mockResolvedValue({ output_text: '{"testCases":[]}' });
+  const provider = new OpenAIAnalysisProvider("test-only-secret");
+  const input = {
+    testpaqId: item.id,
+    ticket: item.ticket,
+    requirements: item.requirements,
+    questions,
+    scenarios: [first, second],
+    testCases: [existing],
+    updateCaseIds: [],
+  };
+  await provider.draftCases(input);
+  const firstSent = JSON.parse(mocks.create.mock.calls[0][0].input);
+  await provider.draftCases({
+    ...input,
+    questions: questions.map((value, index) => ({ ...value, scenarioId: [second, first][index].id })),
+    testCases: [{ ...existing, review: "rejected", archived: true }],
+  });
+  const secondSent = JSON.parse(mocks.create.mock.calls[1][0].input);
+  expect(firstSent.answeredQuestions).not.toEqual(secondSent.answeredQuestions);
+  expect(firstSent.answeredQuestions[0]).toMatchObject({
+    questionId: questions[0].id,
+    scenarioId: first.id,
+    requirementId: null,
+    answer: "Owner",
+  });
+  expect(secondSent.existingCases[0]).toMatchObject({ review: "rejected", archived: true, replacesCaseId: null });
+  expect(firstSent.existingCases[0]).toMatchObject({ review: "accepted", archived: false, needsScopeReview: false });
+  await provider.draftCases({ ...input, ticket: { ...item.ticket, qaContext: "Changed" } });
+  expect(JSON.parse(mocks.create.mock.calls[2][0].input).existingCases[0].needsScopeReview).toBe(true);
+});
+
+it("rejects incomplete structured output instead of parsing a truncated paid response", async () => {
+  mocks.create.mockResolvedValue({ status: "incomplete", output_text: '{"testCases":[]}' });
+  const item = makeFixture();
+  await expect(
+    new OpenAIAnalysisProvider("test-only-secret").draftCases({
+      testpaqId: item.id,
+      ticket: item.ticket,
+      requirements: item.requirements,
+      scenarios: [item.scenarios[0]],
+      testCases: [],
+      updateCaseIds: [],
+    }),
+  ).rejects.toMatchObject({ code: "incomplete_output" });
+  expect(mocks.create.mock.calls[0][0].max_output_tokens).toBe(16384);
 });
 describe("OpenAI provider boundary", () => {
   it("checks actual billable access rather than only listing models", async () => {
@@ -60,36 +121,49 @@ describe("OpenAI provider boundary", () => {
   });
 });
 
-it("drafts detailed cases from disclosed linked scope without generating Cypress code", async () => {
+it("drafts cases for several coverage outputs in one request with only the context a tester needs", async () => {
   const item = makeFixture();
+  const [first, second] = item.scenarios;
   const output = {
     testCases: [
       {
         clientId: "case1",
+        scenarioId: first.id,
+        replacesCaseId: null,
         title: "Hidden amount persists",
-        objective: "Verify stored visibility",
+        description: "Verify stored visibility",
         preconditions: "Owner signed in",
-        postconditions: "Restore visibility",
         steps: [{ action: "Reload campaign", data: "", expectedResult: "Amount stays hidden" }],
-        unknowns: ["Confirm how to access the visibility control"],
       },
     ],
   };
+  const parsed = { testCases: [{ ...output.testCases[0], replacesCaseId: undefined }] };
   mocks.create.mockResolvedValue({ output_text: JSON.stringify(output) });
   const provider = new OpenAIAnalysisProvider("test-only-secret", "selected-model");
   const input = {
     testpaqId: item.id,
-    scenarioId: item.scenarios[0].id,
     ticket: item.ticket,
     requirements: item.requirements.slice(0, 1),
     questions: item.questions,
-    scenarios: [item.scenarios[0]],
+    scenarios: [first, second],
     testCases: [],
+    updateCaseIds: [],
   };
-  expect(await provider.generateCases(input)).toEqual(output);
+  expect(await provider.draftCases(input)).toEqual(parsed);
   const request = mocks.create.mock.calls[0][0];
   expect(request).toMatchObject({ store: false, model: "selected-model", text: { format: { name: "testpaq_test_cases", strict: true } } });
-  expect(JSON.parse(request.input)).toEqual(JSON.parse(JSON.stringify(input)));
-  expect(request.instructions).toContain("Do not generate Cypress code");
-  expect(request.instructions).toContain("unknowns");
+  const sent = JSON.parse(request.input);
+  expect(sent.scenarios.map((value: { scenarioId: string }) => value.scenarioId)).toEqual([first.id, second.id]);
+  expect(sent.answeredQuestions).toEqual([
+    {
+      questionId: item.questions[2].id,
+      question: item.questions[2].text,
+      answer: item.questions[2].resolution,
+      scenarioId: null,
+      requirementId: item.questions[2].requirementId,
+    },
+  ]);
+  expect(request.input).not.toContain("test-only-secret");
+  expect(request.instructions).toContain("Do not generate automation code");
+  expect(request.instructions).toContain("No rationale");
 });

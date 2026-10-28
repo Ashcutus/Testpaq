@@ -143,7 +143,15 @@ export function ReviewPanel({
     addEventListener("keydown", handler);
     return () => removeEventListener("keydown", handler);
   });
-  const addScenario = () =>
+  const addScenario = () => {
+    setSelected(new Set());
+    // Reveal the new human-authored proposal without disturbing filters that already admit it.
+    if (originFilter !== "all" && originFilter !== "human") setOriginFilter("all");
+    if (reviewFilter !== "all" && reviewFilter !== "proposed") setReviewFilter("all");
+    if (categoryFilter !== "all" && categoryFilter !== "other") setCategoryFilter("all");
+    if (destinationFilter !== "all" && destinationFilter !== "manual") setDestinationFilter("all");
+    if (riskOnly) setRiskOnly(false);
+    if (query) setQuery("");
     update((draft) => {
       const timestamp = new Date().toISOString();
       const scenario: Scenario = {
@@ -164,6 +172,7 @@ export function ReviewPanel({
       setExpanded(scenario.id);
       return draft;
     });
+  };
   return (
     <div className="review-layout">
       <details className="review-sidebar">

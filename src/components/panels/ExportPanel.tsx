@@ -153,8 +153,9 @@ export function ExportPanel({
           </Button>
         </div>
         <p>
-          In your Qase project repository, choose Import Data → Qase.io, upload the CSV and select a destination suite. Cases marked To be
-          automated import as “To be automated”; other cases as manual. Case IDs are assigned by Qase. Reimporting creates new cases.
+          In your Qase project repository, choose Import Data → Qase.io CSV [deprecated] (the legacy format), upload the CSV and select a
+          destination suite. Cases marked To be automated import as “To be automated”; other cases as manual. Case IDs are assigned by Qase.
+          Reimporting creates new cases.
         </p>
         {cases.some((value) => value.destinations.automation) && (
           <p className="muted">

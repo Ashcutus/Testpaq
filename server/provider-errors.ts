@@ -12,6 +12,11 @@ const billingCodes = new Set([
 ]);
 export function providerError(error: unknown) {
   const value = error as { status?: number; code?: string; type?: string; name?: string } | null;
+  if (value?.code === "incomplete_output")
+    return {
+      code: "incomplete_output",
+      message: "The AI response reached its output limit. Nothing was added. Select less coverage and retry.",
+    };
   if (billingCodes.has(value?.code || "") || value?.type === "insufficient_quota" || value?.status === 402) {
     return {
       code: value?.code || "insufficient_quota",

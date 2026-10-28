@@ -3,17 +3,17 @@ import { useState } from "react";
 import { expect, it, vi } from "vitest";
 import { makeFixture, reviewedFixtureCase } from "../../../server/fixture";
 import type { Testpaq } from "../../shared/domain";
-import { applyGeneratedCases } from "../../shared/test-cases";
+import { applyGeneratedCases, newTestCase } from "../../shared/test-cases";
 import { TestCasesPanel } from "./TestCasesPanel";
-function Harness({ initial, readOnly = false }: { initial: Testpaq; readOnly?: boolean }) {
+function Harness({ initial, readOnly = false, initialFilter }: { initial: Testpaq; readOnly?: boolean; initialFilter?: string }) {
   const [item, setItem] = useState(initial);
   return (
     <>
       <TestCasesPanel
         item={item}
         update={(recipe) => setItem(recipe(structuredClone(item)))}
+        selectedScenarioId={initialFilter}
         onSelect={vi.fn()}
-        onDraft={vi.fn()}
         readOnly={readOnly}
       />
       <output data-testid="state">{JSON.stringify(item)}</output>
@@ -41,10 +41,11 @@ it("authors multiple cases under one output and requires review again after chan
   expect(saved.testCases).toHaveLength(2);
   expect(saved.testCases!.every((value) => value.scenarioId === item.scenarios[0].id)).toBe(true);
 });
-it("keeps legacy conversion proposed until missing details are resolved and allows completed inspection", () => {
+it("keeps converted legacy cases proposed until missing details are resolved and allows completed inspection", () => {
   const item = makeFixture();
+  const legacy = newTestCase(item, item.scenarios[0], true);
+  item.testCases = [legacy];
   const view = render(<Harness initial={item} />);
-  fireEvent.click(screen.getByRole("button", { name: "Convert coverage to draft case" }));
   expect(screen.getByRole("button", { name: "Accept case" })).toBeDisabled();
   fireEvent.click(screen.getByRole("button", { name: "Mark detail resolved" }));
   expect(screen.getByRole("button", { name: "Accept case" })).toBeEnabled();
@@ -150,6 +151,7 @@ it("keeps a single editor while searching, filtering and navigating linked cases
   expect(screen.getAllByLabelText("Test case title")).toHaveLength(1);
   fireEvent.click(screen.getByRole("button", { name: "Next case" }));
   expect(screen.getByLabelText("Test case title")).toHaveValue("Anonymous reader view");
+  expect(screen.queryByLabelText(/Postconditions/)).toBeNull();
   fireEvent.change(screen.getByLabelText("Case review filter"), { target: { value: "accepted" } });
   expect(screen.getByLabelText("Test case title")).toHaveValue(item.testCases[0].title);
   fireEvent.change(screen.getByLabelText("Search linked cases"), { target: { value: "nothing matches" } });
@@ -195,4 +197,29 @@ it("requires individual review of incomplete cases before allowing bulk approval
   fireEvent.click(screen.getByRole("button", { name: "Decline selected cases" }));
   saved = JSON.parse(screen.getByTestId("state").textContent!) as Testpaq;
   expect(saved.testCases!.every((value) => value.review === "rejected")).toBe(true);
+});
+
+it("lists cases from every coverage output together and adds new ones under the open case's coverage", () => {
+  const item = makeFixture();
+  item.testCases = [
+    { ...reviewedFixtureCase(item, item.scenarios[0]), title: "First coverage case" },
+    { ...reviewedFixtureCase(item, item.scenarios[1]), title: "Second coverage case" },
+  ];
+  render(<Harness initial={item} />);
+  expect(screen.getByRole("button", { name: /First coverage case/ })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /Second coverage case/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Add test case" }));
+  const saved = JSON.parse(screen.getByTestId("state").textContent!) as Testpaq;
+  expect(saved.testCases).toHaveLength(3);
+  expect(saved.testCases![2].scenarioId).toBe(item.scenarios[1].id);
+});
+
+it("does not add a case under a filtered coverage that cannot take cases, so nothing is created out of view", () => {
+  const item = makeFixture();
+  const rejected = item.scenarios.find((value) => value.review === "rejected")!;
+  item.testCases = [reviewedFixtureCase(item, item.scenarios[0])];
+  render(<Harness initial={item} initialFilter={rejected.id} />);
+  expect(screen.getByRole("button", { name: "Add test case" })).toBeDisabled();
+  expect(screen.getByText(/cannot be added to it/)).toBeInTheDocument();
+  expect((JSON.parse(screen.getByTestId("state").textContent!) as Testpaq).testCases).toHaveLength(1);
 });

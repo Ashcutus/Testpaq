@@ -1,8 +1,8 @@
-import { AlertCircle, Check, ClipboardList, Clock3, Download, FileInput, ListChecks, LoaderCircle, Save } from "lucide-react";
+import { AlertCircle, Check, ClipboardList, Clock3, Download, FileInput, ListChecks, LoaderCircle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AppConfig } from "../App";
 import { api, ApiError } from "../lib/api";
-import { ScopeDisclosure } from "./ScopeDisclosure";
+import { AnalyseDialog, type AnalysisPlan } from "./AnalyseDialog";
 import { useRememberedState } from "../lib/remember";
 import { ConflictFields, ReadableValue } from "./ConflictFields";
 import { workspaceReplaced } from "../lib/workspace";
@@ -12,8 +12,7 @@ import { label } from "../lib/utils";
 import { analysisSignature } from "../shared/analysis";
 import { renderQaseCsv } from "../shared/qase";
 import { workflowSummary } from "../shared/workflow";
-import { scopeQuestions } from "../shared/test-cases";
-import { renderMarkdown } from "../shared/export";
+import { renderManualCases, renderMarkdown } from "../shared/export";
 import type { Testpaq, ProjectGroup } from "../shared/domain";
 import { TestCasesPanel } from "./panels/TestCasesPanel";
 import { ExportPanel } from "./panels/ExportPanel";
@@ -52,15 +51,14 @@ export function TestpaqWorkbench({
   const [billingUrl, setBillingUrl] = useState<string>();
   const [error, setError] = useState("");
   const [analysisOpen, setAnalysisOpen] = useState(false);
-  const [caseDraftOpen, setCaseDraftOpen] = useState(false);
-  const [targetCaseId, setTargetCaseId] = useState<string>();
+  const [analysisNotice, setAnalysisNotice] = useState("");
+  const [analysisProgress, setAnalysisProgress] = useState("");
   const [completionOpen, setCompletionOpen] = useState(false);
   const [caseScenarioId, setCaseScenarioId] = useRememberedState<string | undefined>(
     `${id}:coverage`,
     undefined,
     (value) => typeof value === "string",
   );
-  const [focusedCaseId, setFocusedCaseId] = useState<string>();
   const [handoffBusy, setHandoffBusy] = useState(false);
   const [analysing, setAnalysing] = useState(false);
   const [historyVersion, setHistoryVersion] = useState(0);
@@ -95,7 +93,7 @@ export function TestpaqWorkbench({
     const save = saveChainRef.current
       .catch(() => undefined)
       .then(async () => {
-        const saved = await api.save({ ...snapshot, updatedAt: savedVersionRef.current || snapshot.updatedAt }, keepalive);
+        const saved = await api.save({ ...snapshot, updatedAt: savedVersionRef.current || snapshot.updatedAt }, keepalive, baseRef.current);
         savedVersionRef.current = saved.updatedAt;
         baseRef.current = saved;
         return saved;
@@ -265,7 +263,9 @@ export function TestpaqWorkbench({
     if (!current) throw new Error("Testpaq unavailable.");
     return format === "qase"
       ? renderQaseCsv(current)
-      : renderMarkdown(format === "manual" ? { ...current, testCases: workflowSummary(current).manual } : current);
+      : format === "manual"
+        ? renderManualCases(workflowSummary(current).manual)
+        : renderMarkdown(current);
   };
   const recordExport = async () => {
     const current = itemRef.current;
@@ -293,7 +293,7 @@ export function TestpaqWorkbench({
         draft.status = "completed";
         draft.completedAt = new Date().toISOString();
       }
-      const saved = await api.save({ ...draft, updatedAt: savedVersionRef.current ?? draft.updatedAt });
+      const saved = await api.save({ ...draft, updatedAt: savedVersionRef.current ?? draft.updatedAt }, false, baseRef.current);
       itemRef.current = saved;
       savedVersionRef.current = saved.updatedAt;
       baseRef.current = saved;
@@ -307,103 +307,106 @@ export function TestpaqWorkbench({
       setHandoffBusy(false);
     }
   };
-  const analyse = async () => {
-    if (!item) return;
-    setAnalysing(true);
-    setError("");
-    setBillingUrl(undefined);
-    const controller = new AbortController();
-    analysisControllerRef.current = controller;
+  const adopt = (refreshed: Testpaq) => {
+    itemRef.current = refreshed;
+    savedVersionRef.current = refreshed.updatedAt;
+    baseRef.current = refreshed;
+    savedRevisionRef.current = revisionRef.current;
     try {
-      await flushSave();
-      const current = itemRef.current!;
-      const { item: refreshed } = await api.analyse(
-        {
-          testpaqId: current.id,
-          model: config?.model,
-          ticket: current.ticket,
-          requirements: current.requirements,
-          questions: current.questions,
-          scenarios: current.scenarios,
-        },
-        controller.signal,
-      );
-      if (!mountedRef.current || controller.signal.aborted) return;
-      itemRef.current = refreshed;
-      savedVersionRef.current = refreshed.updatedAt;
-      baseRef.current = refreshed;
-      try {
-        clearDraft(refreshed.id);
-      } catch {
-        /* Server copy has been committed. */
-      }
-      savedRevisionRef.current = revisionRef.current;
-      setItem(refreshed);
-      setSaveState("saved");
-      setAnalysisOpen(false);
-      setSection("overview");
-      setHistoryVersion((value) => value + 1);
-    } catch (reason) {
-      if ((reason as Error).name !== "AbortError") {
-        setError((reason as Error).message);
-        if (reason instanceof ApiError) setBillingUrl(reason.billingUrl);
-      }
-      setHistoryVersion((value) => value + 1);
-    } finally {
-      analysisControllerRef.current = undefined;
-      setAnalysing(false);
-      if (mountedRef.current && onConfig)
-        void api
-          .config()
-          .then(onConfig)
-          .catch(() => undefined);
+      clearDraft(refreshed.id);
+    } catch {
+      /* Server copy has been committed. */
     }
+    setItem(refreshed);
+    setSaveState("saved");
   };
-  const draftCases = async () => {
-    if (!item || !caseScenarioId || !config) return;
+  /** One user action: optional ticket analysis, then one batched case request. Never navigates or prompts further. */
+  const runAnalysis = async (plan: AnalysisPlan) => {
+    if (!item || !config) return;
     setAnalysing(true);
     setError("");
     setBillingUrl(undefined);
+    setAnalysisNotice("");
     const controller = new AbortController();
     analysisControllerRef.current = controller;
+    const summary: string[] = [];
+    let partial = false;
     try {
       await flushSave();
-      const current = itemRef.current!;
-      const { item: refreshed } = await api.draftCases(
-        { testpaqId: current.id, scenarioId: caseScenarioId, targetCaseId, updatedAt: current.updatedAt, model: config.model },
-        controller.signal,
-      );
-      if (!mountedRef.current || controller.signal.aborted) return;
-      const added = (refreshed.testCases?.length ?? 0) - (current.testCases?.length ?? 0);
-      itemRef.current = refreshed;
-      savedVersionRef.current = refreshed.updatedAt;
-      baseRef.current = refreshed;
-      savedRevisionRef.current = revisionRef.current;
-      try {
-        clearDraft(refreshed.id);
-      } catch {
-        /* Server copy committed. */
+      if (plan.coverage) {
+        setAnalysisProgress("Analysing ticket…");
+        const before = itemRef.current!;
+        const { item: refreshed } = await api.analyse(
+          {
+            testpaqId: before.id,
+            model: config.model,
+            ticket: before.ticket,
+            requirements: before.requirements,
+            questions: before.questions,
+            scenarios: before.scenarios,
+          },
+          controller.signal,
+        );
+        if (!mountedRef.current || controller.signal.aborted) return;
+        adopt(refreshed);
+        summary.push(
+          `${refreshed.requirements.length - before.requirements.length} requirements, ${refreshed.scenarios.length - before.scenarios.length} coverage suggestions and ${refreshed.questions.length - before.questions.length} questions added`,
+        );
       }
-      setItem(refreshed);
-      setSaveState("saved");
-      setCaseDraftOpen(false);
-      if (added) setFocusedCaseId(refreshed.testCases?.at(-1)?.id);
-      setSection("cases");
-      setDraftNotice(
-        targetCaseId
-          ? "Proposed update ready. Compare it with the current case before applying."
-          : added
-            ? `${added} proposed test cases added. Review each case before exporting.`
-            : "No additional test cases were added. Existing cases were retained.",
+      const current = itemRef.current!;
+      // Analysis can flag accepted coverage for re-review; only draft for what is still current.
+      const scenarioIds = plan.scenarioIds.filter((id) =>
+        current.scenarios.some((value) => value.id === id && value.review === "accepted" && !value.archived && !value.scopeReviewRequired),
+      );
+      const skippedCoverage = plan.scenarioIds.length - scenarioIds.length;
+      if (skippedCoverage) {
+        partial = true;
+        summary.push(
+          `Case drafting skipped for ${skippedCoverage} selected coverage output${skippedCoverage === 1 ? "" : "s"} needing scope review. Review and approve that coverage before choosing Analyse again`,
+        );
+      }
+      const updateCaseIds = plan.updateCaseIds.filter((id) =>
+        (current.testCases ?? []).some((value) => value.id === id && scenarioIds.includes(value.scenarioId)),
+      );
+      if (scenarioIds.length) {
+        setAnalysisProgress("Drafting test cases…");
+        const drafted = await api.draftCases(
+          { testpaqId: current.id, scenarioIds, updateCaseIds, updatedAt: current.updatedAt, model: config.model },
+          controller.signal,
+        );
+        if (!mountedRef.current || controller.signal.aborted) return;
+        adopt(drafted.item);
+        const missing = drafted.missingUpdateCaseIds?.length ?? 0;
+        const skippedNew = drafted.capacitySkippedNewCases ?? 0;
+        const skippedUpdates = drafted.capacitySkippedUpdateCaseIds?.length ?? 0;
+        partial ||= Boolean(missing || skippedNew || skippedUpdates);
+        summary.push(
+          `${drafted.added ?? 0} test case${drafted.added === 1 ? "" : "s"} drafted${drafted.revised ? ` and ${drafted.revised} update${drafted.revised === 1 ? "" : "s"} proposed` : ""}`,
+        );
+        // A requested update the model did not return is reported, not counted as success.
+        if (missing)
+          summary.push(
+            `${missing} requested update${missing === 1 ? " was" : "s were"} not returned, so no proposal was made for ${missing === 1 ? "it" : "them"}`,
+          );
+        if (skippedNew || skippedUpdates)
+          summary.push(
+            `The 3,000-case limit prevented saving ${skippedNew} new case${skippedNew === 1 ? "" : "s"} and ${skippedUpdates} update proposal${skippedUpdates === 1 ? "" : "s"}. The returned drafts remain in analysis history`,
+          );
+      }
+      setAnalysisOpen(false);
+      setAnalysisNotice(
+        `${partial ? "Analysis partly finished" : "Analysis finished"}: ${summary.join("; ") || "nothing to do"}. Everything new is a proposal for you to review.`,
       );
     } catch (reason) {
       if ((reason as Error).name !== "AbortError") {
         setError((reason as Error).message);
         if (reason instanceof ApiError) setBillingUrl(reason.billingUrl);
       }
+      if (summary.length) setAnalysisNotice(`Partly finished: ${summary.join("; ")}.`);
     } finally {
       analysisControllerRef.current = undefined;
       setAnalysing(false);
+      setAnalysisProgress("");
       setHistoryVersion((value) => value + 1);
       if (mountedRef.current && onConfig)
         void api
@@ -437,6 +440,7 @@ export function TestpaqWorkbench({
       </div>
     );
   const progress = workflowSummary(item);
+  const stale = Boolean(item.lastAnalysedSignature && item.lastAnalysedSignature !== analysisSignature(item));
   const openQuestions = item.questions.filter((question) => question.status === "open").length;
   const tabs: Array<[Section, string, typeof FileInput, number?]> = [
     ["ticket", "Initial ticket analysis", FileInput],
@@ -478,6 +482,21 @@ export function TestpaqWorkbench({
           </select>
         </label>
         <div className="button-group">
+          <Button
+            icon={<ListChecks size={16} />}
+            disabled={analysing || handoffBusy || item.status === "completed" || Boolean(item.archived)}
+            onClick={() => setAnalysisOpen(true)}
+          >
+            Analyse
+            {stale && (
+              <span
+                className="stale-dot"
+                role="img"
+                aria-label="Out of date since last analysis"
+                title="Ticket, requirements or answers changed since the last analysis"
+              />
+            )}
+          </Button>
           <Button
             variant="secondary"
             disabled={analysing || handoffBusy || Boolean(item.archived)}
@@ -522,6 +541,14 @@ export function TestpaqWorkbench({
           </Button>
         </div>
       )}
+      {analysisNotice && (
+        <div className="info-note" role="status">
+          {analysisNotice}
+          <Button variant="ghost" size="sm" onClick={() => setAnalysisNotice("")}>
+            Dismiss
+          </Button>
+        </div>
+      )}
       {item.reviewNotice && <p className="warning-note">{item.reviewNotice}</p>}
       {item.archived && (
         <p className="warning-note">Archived. Restore this Testpaq from All Testpaqs before editing. Exports remain available.</p>
@@ -532,87 +559,56 @@ export function TestpaqWorkbench({
           remain available.
         </p>
       )}
-      {item.lastRefresh && (
-        <details className="refresh-details">
-          <summary>
-            Last analysis: {item.lastRefresh.added.length} added · {item.lastRefresh.changed.length} changed ·{" "}
-            {item.lastRefresh.retained.length} retained
-          </summary>
-          <p>
-            Last refresh: {item.lastRefresh.added.length} added · {item.lastRefresh.changed.length} changed ·{" "}
-            {item.lastRefresh.retained.length} retained.{" "}
-            {item.scenarios.filter((scenario) => scenario.scopeReviewRequired && !scenario.archived).length} accepted scenarios need scope
-            review.
-          </p>
-        </details>
-      )}
-      {item.lastAnalysedSignature && item.lastAnalysedSignature !== analysisSignature(item) && (
-        <div className="warning-note">
-          Ticket, requirements or answers have changed since analysis.
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={item.status === "completed" || analysing || handoffBusy}
-            onClick={() => setAnalysisOpen(true)}
-          >
-            Review coverage updates
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setCaseScenarioId(progress.scopeReview[0]?.scenarioId);
-              setSection("cases");
-            }}
-          >
-            Review affected cases
-          </Button>
-        </div>
-      )}
-      <details className="workflow-readiness">
-        <summary>
-          Review readiness · {progress.manual.length} Manual ready · {progress.qase.length} Qase ready
-        </summary>
-        <section className="workflow-summary" aria-label="Review readiness">
-          <button onClick={() => setSection("overview")}>
-            <strong>{progress.uncovered.length}</strong> coverage gap{progress.uncovered.length === 1 ? "" : "s"}
-          </button>
-          <button
-            onClick={() => {
-              setCaseScenarioId(progress.needsCases[0]?.id);
-              setSection("cases");
-            }}
-          >
-            <strong>{progress.needsCases.length}</strong> need cases
-          </button>
-          <button
-            onClick={() => {
-              setCaseScenarioId(progress.scopeReview[0]?.scenarioId);
-              setSection("cases");
-            }}
-          >
-            <strong>{progress.scopeReview.length}</strong> scope changed
-          </button>
-          <button
-            onClick={() => {
-              setCaseScenarioId(progress.proposed[0]?.scenarioId);
-              setSection("cases");
-            }}
-          >
-            <strong>{progress.proposed.length}</strong> case{progress.proposed.length === 1 ? "" : "s"} to review
-          </button>
-          <button onClick={() => setSection("export")}>
-            <strong>{progress.manual.length}</strong> Manual ready · <strong>{progress.qase.length}</strong> Qase ready
-          </button>
-        </section>
-      </details>
+      <section className="status-strip" aria-label="Review readiness">
+        <button onClick={() => setSection("overview")}>
+          <strong>{progress.uncovered.length}</strong> coverage gap{progress.uncovered.length === 1 ? "" : "s"}
+        </button>
+        <button
+          onClick={() => {
+            setCaseScenarioId(undefined);
+            setSection("cases");
+          }}
+        >
+          <strong>{progress.needsCases.length}</strong> need cases
+        </button>
+        <button
+          onClick={() => {
+            setCaseScenarioId(undefined);
+            setSection("cases");
+          }}
+        >
+          <strong>{progress.scopeReview.length}</strong> scope changed
+        </button>
+        <button
+          onClick={() => {
+            setCaseScenarioId(undefined);
+            setSection("cases");
+          }}
+        >
+          <strong>{progress.proposed.length}</strong> to review
+        </button>
+        <button onClick={() => setSection("export")}>
+          <strong>{progress.manual.length}</strong> Manual · <strong>{progress.qase.length}</strong> Qase ready
+        </button>
+        {item.lastRefresh && (
+          <span className="status-note">
+            Last analysis {item.lastRefresh.at.slice(0, 10)}: {item.lastRefresh.added.length} added · {item.lastRefresh.changed.length}{" "}
+            changed
+          </span>
+        )}
+        {stale && <span className="status-note status-stale">Out of date since last analysis</span>}
+      </section>
       <fieldset className="workbench-body" disabled={analysing || handoffBusy} inert={analysing || handoffBusy}>
         <nav className="section-nav" aria-label="Testpaq sections">
           {tabs.map(([value, text, Icon, count]) => (
             <button
               key={value}
               aria-current={section === value || (section === "questions" && value === "overview") ? "page" : undefined}
-              onClick={() => setSection(value)}
+              onClick={() => {
+                // Entering Test cases from the tabs shows every case; per-coverage links set their own filter.
+                if (value === "cases") setCaseScenarioId(undefined);
+                setSection(value);
+              }}
             >
               {value === "history" ? (
                 <Icon size={16} />
@@ -629,7 +625,7 @@ export function TestpaqWorkbench({
         <section className="workbench-content">
           {section === "ticket" && (
             <fieldset className="editing-panels" disabled={item.status === "completed" || item.archived}>
-              <TicketPanel view="ticket" item={item} update={update} onAnalyse={() => setAnalysisOpen(true)} />
+              <TicketPanel view="ticket" item={item} update={update} />
             </fieldset>
           )}
           {section === "review" && (
@@ -649,18 +645,11 @@ export function TestpaqWorkbench({
               item={item}
               update={update}
               selectedScenarioId={caseScenarioId}
-              focusedCaseId={focusedCaseId}
-              onFocusHandled={() => setFocusedCaseId(undefined)}
               onSelect={setCaseScenarioId}
               onRevisionApplied={() => setDraftNotice("")}
               onReviewCoverage={(id) => {
                 setCaseScenarioId(id);
                 setSection("review");
-              }}
-              onDraft={(id, targetId) => {
-                setTargetCaseId(targetId);
-                setCaseScenarioId(id);
-                setCaseDraftOpen(true);
               }}
               readOnly={item.status === "completed" || Boolean(item.archived)}
             />
@@ -668,24 +657,10 @@ export function TestpaqWorkbench({
           {(section === "overview" || section === "questions") && (
             <>
               <fieldset className="editing-panels" disabled={item.status === "completed" || item.archived}>
-                <TicketPanel view="requirements" item={item} update={update} onAnalyse={() => setAnalysisOpen(true)} />
+                <TicketPanel view="requirements" item={item} update={update} />
               </fieldset>
 
-              <QuestionsPanel
-                item={item}
-                update={update}
-                onRefresh={() => setAnalysisOpen(true)}
-                onReviewCases={(questionId) => {
-                  setCaseScenarioId(
-                    progress.scopeReview.find((value) => {
-                      const parent = item.scenarios.find((entry) => entry.id === value.scenarioId);
-                      return parent && scopeQuestions(item, parent).some((question) => question.id === questionId);
-                    })?.scenarioId ?? progress.scopeReview[0]?.scenarioId,
-                  );
-                  setSection("cases");
-                }}
-                readOnly={item.status === "completed" || Boolean(item.archived)}
-              />
+              <QuestionsPanel item={item} update={update} readOnly={item.status === "completed" || Boolean(item.archived)} />
             </>
           )}
           {section === "export" && (
@@ -711,7 +686,8 @@ export function TestpaqWorkbench({
               </span>
               <Button
                 variant="secondary"
-                onClick={() =>
+                onClick={() => {
+                  if (section === "review") setCaseScenarioId(undefined);
                   setSection(
                     section === "ticket"
                       ? "overview"
@@ -720,8 +696,8 @@ export function TestpaqWorkbench({
                         : section === "review"
                           ? "cases"
                           : "export",
-                  )
-                }
+                  );
+                }}
               >
                 {section === "ticket"
                   ? "Review requirements"
@@ -764,81 +740,6 @@ export function TestpaqWorkbench({
         <p>
           {progress.manual.length} Manual cases and {progress.qase.length} Qase cases ready for handoff. You can reopen later.
         </p>
-      </Dialog>
-      <Dialog
-        open={caseDraftOpen}
-        onOpenChange={(open) => {
-          if (!analysing) setCaseDraftOpen(open);
-        }}
-        closeDisabled={analysing}
-        title={targetCaseId ? "Suggest an update to this case" : "Draft linked test cases"}
-        description={
-          targetCaseId
-            ? "A billable AI request proposes a revision. Compare it before applying; your existing case stays intact."
-            : "A separate billable AI request creates proposals for the selected coverage output. Nothing is exported automatically."
-        }
-        footer={
-          <>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                if (analysing) analysisControllerRef.current?.abort();
-                else setCaseDraftOpen(false);
-              }}
-            >
-              {analysing ? "Cancel drafting" : "Cancel"}
-            </Button>
-            <Button disabled={analysing || !config?.configured} onClick={() => void draftCases()}>
-              {analysing ? "Drafting cases…" : targetCaseId ? "Suggest update" : "Draft test cases"}
-            </Button>
-          </>
-        }
-      >
-        <div className="disclosure">
-          <div>
-            <span>Provider</span>
-            <strong>{config?.provider ?? "OpenAI"}</strong>
-          </div>
-          <div>
-            <span>Model</span>
-            <strong>{config?.model ?? "Not configured"}</strong>
-          </div>
-        </div>
-        <p>
-          Content sent: all ticket fields, the selected coverage output, its linked requirements, applicable questions/answers and its
-          existing linked test cases. Existing decisions and human edits are retained. No repository or Cypress code is sent or generated.
-        </p>
-        <ScopeDisclosure
-          input={{
-            testpaqId: item.id,
-            model: config?.model,
-            targetCaseId,
-            scenarioId: caseScenarioId,
-            ticket: item.ticket,
-            scenarios: item.scenarios.filter((value) => value.id === caseScenarioId),
-            requirements: item.requirements.filter((value) =>
-              item.scenarios.find((scenario) => scenario.id === caseScenarioId)?.requirementIds.includes(value.id),
-            ),
-            questions: item.scenarios.find((value) => value.id === caseScenarioId)
-              ? scopeQuestions(
-                  item,
-                  item.scenarios.find((value) => value.id === caseScenarioId)!,
-                )
-              : [],
-            testCases: (item.testCases ?? []).filter((value) => value.scenarioId === caseScenarioId),
-          }}
-        />
-        {!config?.configured && <p className="warning-note">Connect OpenAI to draft cases, or add them manually.</p>}
-        {error && (
-          <div className="error-banner" role="alert">
-            {error}
-            {billingUrl && (
-              <a href={billingUrl} target="_blank" rel="noreferrer">
-                Open API billing ↗
-              </a>
-            )}
-          </div>
-        )}
       </Dialog>
       <Dialog
         open={Boolean(recovery)}
@@ -926,95 +827,19 @@ export function TestpaqWorkbench({
           </>
         )}
       </Dialog>
-      <Dialog
+      <AnalyseDialog
         open={analysisOpen}
-        onOpenChange={(open) => {
-          if (open || !analysing) setAnalysisOpen(open);
-        }}
-        closeDisabled={analysing}
-        title={item.lastAnalysedSignature || item.scenarios.length ? "Refresh Testpaq analysis" : "Review data sent for analysis"}
-        description="Refresh includes current scope and question answers. Reviewed scenarios and human edits are preserved; suggestions are merged into existing coverage."
-        footer={
-          <>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                if (analysing) analysisControllerRef.current?.abort();
-                setAnalysisOpen(false);
-              }}
-            >
-              {analysing ? "Cancel analysis" : "Cancel"}
-            </Button>
-            <Button
-              onClick={analyse}
-              disabled={analysing || !config?.configured}
-              icon={analysing ? <LoaderCircle className="spin" size={16} /> : <ListChecks size={16} />}
-            >
-              {analysing ? "Analysing ticket…" : item.scenarios.length ? "Refresh analysis" : "Analyse ticket"}
-            </Button>
-          </>
-        }
-      >
-        <div className="disclosure">
-          <div>
-            <span>Provider</span>
-            <strong>{config?.provider || "OpenAI"}</strong>
-          </div>
-          <div>
-            <span>Model</span>
-            <strong>{config?.model || "gpt-5-mini"}</strong>
-          </div>
-          <div>
-            <span>Content</span>
-            <strong>
-              Ticket fields, {item.requirements.length} requirements, {item.questions.length} questions/answers and {item.scenarios.length}{" "}
-              scenarios
-            </strong>
-          </div>
-        </div>
-        <div className="disclosure-preview">
-          <h3>Content preview</h3>
-          <dl>
-            <dt>Title</dt>
-            <dd>{item.ticket.title || item.title}</dd>
-            <dt>Description</dt>
-            <dd>{item.ticket.description || "Not supplied"}</dd>
-            <dt>Acceptance criteria</dt>
-            <dd>{item.ticket.acceptanceCriteria || "Not supplied"}</dd>
-            <dt>QA context</dt>
-            <dd>{item.ticket.qaContext || "Not supplied"}</dd>
-            <dt>Requirements</dt>
-            <dd>{item.requirements.map((value) => `${value.active ? "Active" : "Inactive"}: ${value.text}`).join("\n") || "None"}</dd>
-            <dt>Questions and answers</dt>
-            <dd>
-              {item.questions.map((value) => `${value.status}: ${value.text} — ${value.resolution || "No answer"}`).join("\n") || "None"}
-            </dd>
-            <dt>Existing scenarios</dt>
-            <dd>{item.scenarios.map((value) => `${value.review}: ${value.title} — ${value.expectedOutcome}`).join("\n") || "None"}</dd>
-          </dl>
-        </div>
-        <p className="privacy-note">
-          <Save size={14} /> Your local database, other Testpaqs, credentials and files are not included.
-        </p>
-        {error && (
-          <div className="error-banner" role="alert">
-            <span>{error}</span>
-            {billingUrl && (
-              <a href={billingUrl} target="_blank" rel="noreferrer">
-                Open API billing ↗
-              </a>
-            )}
-          </div>
-        )}
-        {!config?.configured && (
-          <div className="warning-note">
-            <AlertCircle size={16} />
-            <span>
-              OpenAI is not configured. Set <code>OPENAI_API_KEY</code> on the local service, or continue manually.
-            </span>
-          </div>
-        )}
-      </Dialog>
+        onOpenChange={setAnalysisOpen}
+        item={item}
+        config={config}
+        busy={analysing}
+        progress={analysisProgress}
+        error={error}
+        billingUrl={billingUrl}
+        stale={stale}
+        onRun={(plan) => void runAnalysis(plan)}
+        onCancel={() => analysisControllerRef.current?.abort()}
+      />
     </div>
   );
 }

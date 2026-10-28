@@ -1,6 +1,17 @@
-import type { AnalysisInput, AnalysisResult, AnalysisRun, Testpaq, TestpaqSummary, ProjectGroup, ProviderStatus } from "../shared/domain";
+import type {
+  AnalysisInput,
+  AnalysisResult,
+  AnalysisRun,
+  CaseApplication,
+  Testpaq,
+  TestpaqSummary,
+  ProjectGroup,
+  ProviderStatus,
+} from "../shared/domain";
 
 import { observeWorkspace, workspaceGeneration, workspaceReplaced } from "./workspace";
+import { recordPatch } from "../shared/patch";
+import { compactTestpaqSignatures } from "../shared/test-cases";
 
 const token = document.querySelector<HTMLMetaElement>('meta[name="testpaq-session"]')?.content || "dev-session";
 
@@ -65,8 +76,16 @@ export const api = {
   get: (id: string) => request<Testpaq>(`/api/testpaqs/${id}`),
   create: (title: string, groupId?: string) =>
     request<Testpaq>("/api/testpaqs", { method: "POST", body: JSON.stringify({ title, groupId }) }),
-  save: (item: Testpaq, keepalive = false) =>
-    request<Testpaq>(`/api/testpaqs/${item.id}`, { method: "PUT", body: JSON.stringify(item), keepalive }),
+  save: (item: Testpaq, keepalive = false, base?: Testpaq) =>
+    request<Testpaq>(`/api/testpaqs/${item.id}`, {
+      method: base ? "PATCH" : "PUT",
+      body: JSON.stringify(
+        base
+          ? { updatedAt: item.updatedAt, operations: recordPatch(compactTestpaqSignatures(base), compactTestpaqSignatures(item)) }
+          : compactTestpaqSignatures(item),
+      ),
+      keepalive,
+    }),
   archive: (id: string, archived: boolean, updatedAt: string) =>
     request<Testpaq>(`/api/testpaqs/${id}/archive`, { method: "PATCH", body: JSON.stringify({ archived, updatedAt }) }),
   duplicate: (id: string) => request<Testpaq>(`/api/testpaqs/${id}/duplicate`, { method: "POST" }),
@@ -78,9 +97,14 @@ export const api = {
       signal,
     }),
   draftCases: (
-    input: { testpaqId: string; scenarioId: string; targetCaseId?: string; updatedAt: string; model: string },
+    input: { testpaqId: string; scenarioIds: string[]; updateCaseIds: string[]; updatedAt: string; model: string },
     signal?: AbortSignal,
-  ) => request<{ item: Testpaq; run: AnalysisRun }>("/api/test-cases/draft", { method: "POST", body: JSON.stringify(input), signal }),
+  ) =>
+    request<CaseApplication & { item: Testpaq; run: AnalysisRun }>("/api/test-cases/draft", {
+      method: "POST",
+      body: JSON.stringify(input),
+      signal,
+    }),
   history: (id: string, offset = 0) => request<AnalysisRun[]>(`/api/testpaqs/${id}/history?offset=${offset}`),
   fixture: (kind: "sample" | "stress") => request<Testpaq>(`/api/dev/fixtures/${kind}`, { method: "POST" }),
 };

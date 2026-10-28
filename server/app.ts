@@ -6,12 +6,18 @@ import { bodyLimit } from "hono/body-limit";
 import { secureHeaders } from "hono/secure-headers";
 import { z } from "zod";
 import {
-  CaseGenerationInputSchema,
-  CaseGenerationResultSchema,
+  CaseBatchInputSchema,
+  CaseBatchResultSchema,
+  CaseBatchResponseSchema,
+  CASE_CHUNK_SIZE,
+  MAX_DRAFT_SCENARIOS,
+  MAX_TEST_CASES,
   AnalysisInputSchema,
   AnalysisResultSchema,
   TestpaqSchema,
   type AnalysisResult,
+  type CaseBatchResult,
+  type Scenario,
   type Testpaq,
 } from "../src/shared/domain.js";
 import { renderQaseCsv } from "../src/shared/qase.js";
@@ -19,10 +25,11 @@ import { renderMarkdown } from "../src/shared/export.js";
 import { makeFixture } from "./fixture.js";
 import { OpenAIAnalysisProvider, type AnalysisProvider } from "./provider.js";
 import { BILLING_URL, providerError } from "./provider-errors.js";
-import { applyGeneratedCases, scopeQuestions, caseScopeSignature, testCaseContentSignature } from "../src/shared/test-cases.js";
+import { applyGeneratedBatch, scopeQuestions, caseScopeSignature, testCaseContentSignature } from "../src/shared/test-cases.js";
 import { applyAnalysis } from "../src/shared/analysis.js";
 import type { ProviderStatus } from "../src/shared/domain.js";
 import type { TestpaqStore } from "./store.js";
+import { RecordPatchSchema, applyRecordPatch } from "../src/shared/patch.js";
 
 type AppOptions = {
   store: TestpaqStore;
@@ -287,13 +294,24 @@ export function createApp(options: AppOptions) {
     const item = options.store.get(context.req.param("id"));
     return item ? context.json(item) : context.json({ error: "Testpaq not found." }, 404);
   });
-  app.put("/api/testpaqs/:id", async (context) => {
-    const body = TestpaqSchema.parse(await context.req.json());
+  const saveTestpaq = async (context: Context) => {
+    const raw = await context.req.json();
     const stale = rejectReplacedWorkspace(context);
     if (stale) return stale;
-    if (body.id !== context.req.param("id")) return context.json({ error: "ID mismatch." }, 400);
-    const existing = options.store.get(body.id);
+    const existing = options.store.get(context.req.param("id")!);
     if (!existing) return context.json({ error: "Testpaq not found." }, 404);
+    let body: Testpaq;
+    if (context.req.method === "PATCH") {
+      const patch = RecordPatchSchema.parse(raw);
+      if (patch.updatedAt !== existing.updatedAt)
+        return context.json({ error: "This Testpaq changed in another tab. Reload before saving.", code: "save_conflict" }, 409);
+      try {
+        body = TestpaqSchema.parse(applyRecordPatch(existing, patch.operations));
+      } catch {
+        return context.json({ error: "Invalid Testpaq changes." }, 400);
+      }
+    } else body = TestpaqSchema.parse(raw);
+    if (body.id !== context.req.param("id")) return context.json({ error: "ID mismatch." }, 400);
     if (existing.archived) return context.json({ error: "Restore this archived Testpaq before editing.", code: "archived_readonly" }, 409);
     if (body.updatedAt !== existing.updatedAt)
       return context.json(
@@ -321,7 +339,9 @@ export function createApp(options: AppOptions) {
         updatedAt: new Date(Math.max(Date.now(), Date.parse(existing.updatedAt) + 1)).toISOString(),
       }),
     );
-  });
+  };
+  app.put("/api/testpaqs/:id", saveTestpaq);
+  app.patch("/api/testpaqs/:id", saveTestpaq);
   app.patch("/api/testpaqs/:id/archive", async (context) => {
     const { archived, updatedAt } = z.object({ archived: z.boolean(), updatedAt: z.iso.datetime() }).parse(await context.req.json());
     const stale = rejectReplacedWorkspace(context);
@@ -428,8 +448,8 @@ export function createApp(options: AppOptions) {
     const request = z
       .object({
         testpaqId: z.uuid(),
-        scenarioId: z.uuid(),
-        targetCaseId: z.uuid().optional(),
+        scenarioIds: z.array(z.uuid()).min(1).max(MAX_DRAFT_SCENARIOS),
+        updateCaseIds: z.array(z.uuid()).max(500).default([]),
         updatedAt: z.iso.datetime(),
         model: z.string().trim().min(1).max(100),
       })
@@ -444,55 +464,95 @@ export function createApp(options: AppOptions) {
     if (original.updatedAt !== request.updatedAt)
       return context.json({ error: "The Testpaq changed. Save or reload before drafting cases.", code: "analysis_conflict" }, 409);
     if (request.model !== selectedModel)
-      return context.json({ error: "The selected model changed. Reopen the draft dialog.", code: "model_conflict" }, 409);
-    const parent = original.scenarios.find((value) => value.id === request.scenarioId);
-    if (!parent || parent.review !== "accepted" || parent.archived || parent.scopeReviewRequired)
+      return context.json(
+        { error: "The selected model changed. Reopen analysis to review the current model.", code: "model_conflict" },
+        409,
+      );
+    const scenarioIds = [...new Set(request.scenarioIds)];
+    const updateCaseIds = [...new Set(request.updateCaseIds)];
+    const parents = scenarioIds.map((id) => original.scenarios.find((value) => value.id === id));
+    if (parents.some((value) => !value || value.review !== "accepted" || value.archived || value.scopeReviewRequired))
       return context.json({ error: "Choose accepted, current coverage before drafting cases." }, 400);
-    if (
-      request.targetCaseId &&
-      !(original.testCases ?? []).some(
-        (value) => value.id === request.targetCaseId && value.scenarioId === parent.id && !value.archived && !value.replacesCaseId,
-      )
-    )
-      return context.json({ error: "Choose an existing, unarchived case to update." }, 400);
+    const targets = updateCaseIds.map((id) => (original.testCases ?? []).find((value) => value.id === id));
+    if (targets.some((value) => !value || value.archived || value.replacesCaseId || !scenarioIds.includes(value.scenarioId)))
+      return context.json({ error: "Choose existing, unarchived cases under the selected coverage to update." }, 400);
+    if ((original.testCases?.length ?? 0) >= MAX_TEST_CASES)
+      return context.json(
+        {
+          error:
+            "This Testpaq has reached the 3,000-case limit. Existing cases can still be edited; new drafts and update proposals need available space.",
+          code: "case_capacity",
+        },
+        409,
+      );
     const currentProvider = provider;
-    if (!currentProvider?.generateCases)
+    if (!currentProvider?.draftCases)
       return context.json({ error: "Connect OpenAI to draft test cases. Manual case creation remains available." }, 503);
-    const input = CaseGenerationInputSchema.parse({
-      testpaqId: original.id,
-      model: selectedModel,
-      scenarioId: parent.id,
-      targetCaseId: request.targetCaseId,
-      ticket: original.ticket,
-      requirements: original.requirements.filter((value) => parent.requirementIds.includes(value.id)),
-      questions: scopeQuestions(original, parent),
-      scenarios: [parent],
-      testCases: (original.testCases ?? []).filter((value) => value.scenarioId === parent.id),
-    });
+    const selected = parents as Scenario[];
+    const inputFor = (scenarios: Scenario[]) =>
+      CaseBatchInputSchema.parse({
+        testpaqId: original.id,
+        model: selectedModel,
+        ticket: original.ticket,
+        requirements: original.requirements.filter((value) => scenarios.some((scenario) => scenario.requirementIds.includes(value.id))),
+        questions: [
+          ...new Map(scenarios.flatMap((scenario) => scopeQuestions(original, scenario)).map((value) => [value.id, value])).values(),
+        ],
+        scenarios,
+        testCases: (original.testCases ?? []).filter((value) => scenarios.some((scenario) => scenario.id === value.scenarioId)),
+        updateCaseIds: updateCaseIds.filter((id) =>
+          scenarios.some((scenario) => targets.find((value) => value?.id === id)?.scenarioId === scenario.id),
+        ),
+      });
+    const input = inputFor(selected);
     const run = options.store.startRun({
       testpaqId: original.id,
       provider: currentProvider.name,
       model: currentProvider.model,
-      promptVersion: "testpaq-test-cases-v2",
-      disclosure: `${request.targetCaseId ? "Propose case update" : "Draft cases"} for ${parent.title}: ticket fields, ${input.requirements.length} linked requirements, ${input.questions?.length ?? 0} questions/answers, one coverage output and ${input.testCases.length} existing linked cases`,
+      promptVersion: "testpaq-test-cases-v5",
+      disclosure: `Draft test cases for ${selected.length} coverage outputs${updateCaseIds.length ? ` and update ${updateCaseIds.length} cases` : ""}: ticket fields, ${input.requirements.length} linked requirements, ${input.questions?.length ?? 0} questions/answers and ${input.testCases.length} existing linked cases`,
       inputHash: createHash("sha256").update(JSON.stringify(input)).digest("hex"),
       inputSnapshot: input,
     });
     activeAnalyses.add(original.id);
+    const chunks: Scenario[][] = [];
+    for (let index = 0; index < selected.length; index += CASE_CHUNK_SIZE) chunks.push(selected.slice(index, index + CASE_CHUNK_SIZE));
+    const merged: CaseBatchResult = { testCases: [] };
+    let completedChunks = 0;
+    const retainedResult = (reason: string): CaseBatchResult | undefined => {
+      if (!completedChunks) return undefined;
+      const retained = CaseBatchResultSchema.safeParse({ ...merged, incomplete: { completedChunks, totalChunks: chunks.length, reason } });
+      return retained.success ? retained.data : undefined;
+    };
     try {
       const signal = options.shutdownSignal ? AbortSignal.any([context.req.raw.signal, options.shutdownSignal]) : context.req.raw.signal;
-      const result = CaseGenerationResultSchema.parse(await currentProvider.generateCases(input, signal));
-      if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
+      // A large selection is split into sequential provider calls but remains one user action and one run record.
+      for (const [index, chunk] of chunks.entries()) {
+        const chunkInput = inputFor(chunk);
+        const part = CaseBatchResponseSchema.parse(await currentProvider.draftCases(chunkInput, signal));
+        if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
+        // Validate provider IDs first, then assign bounded unique IDs for the merged run.
+        const ownScenarios = new Set(chunk.map((value) => value.id));
+        const ownTargets = new Set(chunkInput.updateCaseIds);
+        const routed = part.testCases
+          .filter((value) => ownScenarios.has(value.scenarioId) && (!value.replacesCaseId || ownTargets.has(value.replacesCaseId)))
+          .map((value, entryIndex) => ({ ...value, clientId: `${index}:${entryIndex}` }));
+        // Retain only a validated prefix so an invalid later chunk cannot also defeat failure recording.
+        const candidate = CaseBatchResultSchema.parse({ testCases: [...merged.testCases, ...routed] });
+        merged.testCases = candidate.testCases;
+        completedChunks++;
+      }
+      const result = CaseBatchResultSchema.parse(merged);
       const latest = options.store.get(original.id);
       if (!latest || latest.updatedAt !== original.updatedAt) {
-        options.store.failRun(run.id, "analysis_conflict");
+        options.store.failRun(run.id, "analysis_conflict", retainedResult("analysis_conflict"));
         return context.json({ error: "The Testpaq changed during drafting. No cases were applied.", code: "analysis_conflict" }, 409);
       }
       const completed = options.store.database.transaction(() => {
-        const item = applyGeneratedCases(latest, parent.id, result, run.id, request.targetCaseId);
-        const runRecord = options.store.finishRun(run.id, result);
+        const { item, ...application } = applyGeneratedBatch(latest, scenarioIds, updateCaseIds, result, run.id);
+        const runRecord = options.store.finishRun(run.id, { ...result, application });
         options.store.save(item);
-        return { item, run: runRecord };
+        return { item, run: runRecord, ...application };
       })();
       if (provider === currentProvider)
         providerStatus = {
@@ -504,13 +564,21 @@ export function createApp(options: AppOptions) {
       return context.json(completed);
     } catch (error) {
       if (context.req.raw.signal.aborted || options.shutdownSignal?.aborted || (error instanceof Error && error.name === "AbortError")) {
-        options.store.failRun(run.id, "cancelled");
+        options.store.failRun(run.id, "cancelled", retainedResult("cancelled"));
         return context.json({ error: "Case drafting cancelled.", runId: run.id }, 409);
       }
       const detail = providerError(error);
-      options.store.failRun(run.id, detail.code);
+      options.store.failRun(run.id, detail.code, retainedResult(detail.code));
       if (provider === currentProvider && detail.code !== "invalid_analysis") providerStatus = { status: "error", ...detail };
-      return context.json({ error: detail.message, code: detail.code, billingUrl: detail.billingUrl, runId: run.id }, 502);
+      return context.json(
+        {
+          error: `${detail.message}${completedChunks ? " Earlier returned drafts remain in analysis history; no cases were saved." : ""}`,
+          code: detail.code,
+          billingUrl: detail.billingUrl,
+          runId: run.id,
+        },
+        502,
+      );
     } finally {
       activeAnalyses.delete(original.id);
     }

@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { makeFixture } from "../../../server/fixture";
 import type { Testpaq } from "../../shared/domain";
 import { TicketPanel } from "./TicketPanel";
@@ -9,7 +9,7 @@ function Harness({ initial }: { initial: Testpaq }) {
   const [item, setItem] = useState(initial);
   return (
     <>
-      <TicketPanel view="requirements" item={item} update={(recipe) => setItem(recipe(structuredClone(item)))} onAnalyse={vi.fn()} />
+      <TicketPanel view="requirements" item={item} update={(recipe) => setItem(recipe(structuredClone(item)))} />
       <output data-testid="requirements">{JSON.stringify(item.requirements)}</output>
     </>
   );

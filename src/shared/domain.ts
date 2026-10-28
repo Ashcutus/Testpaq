@@ -1,6 +1,14 @@
 import { z } from "zod";
 import { caseContentIssues, isDraftText, scenarioContentIssues } from "./authoring.js";
 
+export const MAX_TEST_CASES = 3000;
+export const MAX_DRAFT_SCENARIOS = 200;
+export const CASE_CHUNK_SIZE = 6;
+export const MAX_CASES_PER_RESPONSE = 6000;
+export const MAX_CASE_RESPONSE_BYTES = 1024 * 1024;
+export const MAX_CASE_RESULT_BYTES = 40 * 1024 * 1024;
+export const MAX_CASE_CHUNKS = Math.ceil(MAX_DRAFT_SCENARIOS / CASE_CHUNK_SIZE);
+
 export const RequirementSourceSchema = z.enum(["acceptance_criteria", "description", "human"]);
 export const OriginSchema = z.enum(["explicit", "inferred", "human"]);
 export const ReviewSchema = z.enum(["proposed", "accepted", "rejected"]);
@@ -148,7 +156,7 @@ export const TestpaqSchema = z
     ticket: TicketSchema,
     requirements: z.array(RequirementSchema).max(500),
     scenarios: z.array(ScenarioSchema).max(1000),
-    testCases: z.array(TestCaseSchema).max(3000).optional(),
+    testCases: z.array(TestCaseSchema).max(MAX_TEST_CASES).optional(),
     questions: z.array(QuestionSchema).max(500),
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
@@ -210,7 +218,7 @@ export const AnalysisInputSchema = z.object({
   requirements: z.array(RequirementSchema).max(500),
   questions: z.array(QuestionSchema).max(500).optional(),
   scenarios: z.array(ScenarioSchema).max(1000).optional(),
-  testCases: z.array(TestCaseSchema).max(3000).optional(),
+  testCases: z.array(TestCaseSchema).max(MAX_TEST_CASES).optional(),
   scenarioId: z.uuid().optional(),
   targetCaseId: z.uuid().optional(),
 });
@@ -294,7 +302,7 @@ export const AnalysisResultSchema = z
 export const CaseGenerationInputSchema = AnalysisInputSchema.extend({
   scenarioId: z.uuid(),
   scenarios: z.array(ScenarioSchema).length(1),
-  testCases: z.array(TestCaseSchema).max(3000),
+  testCases: z.array(TestCaseSchema).max(MAX_TEST_CASES),
 });
 export const CaseGenerationResultSchema = z
   .object({
@@ -319,9 +327,76 @@ export const CaseGenerationResultSchema = z
     if (new Set(value.testCases.map((item) => item.clientId)).size !== value.testCases.length)
       context.addIssue({ code: "custom", message: "Duplicate generated test case IDs." });
   });
-export const AnalysisRunResultSchema = z.union([AnalysisResultSchema, CaseGenerationResultSchema]);
+// One request can draft cases for several coverage outputs and propose revisions for chosen existing cases.
+export const CaseBatchInputSchema = AnalysisInputSchema.extend({
+  scenarios: z.array(ScenarioSchema).min(1).max(MAX_DRAFT_SCENARIOS),
+  testCases: z.array(TestCaseSchema).max(MAX_TEST_CASES),
+  updateCaseIds: z.array(z.uuid()).max(500),
+});
+export const CaseApplicationSchema = z.object({
+  added: z.number().int().nonnegative(),
+  revised: z.number().int().nonnegative(),
+  missingUpdateCaseIds: z.array(z.uuid()).max(500),
+  capacitySkippedNewCases: z.number().int().nonnegative(),
+  capacitySkippedUpdateCaseIds: z.array(z.uuid()).max(500),
+});
+export type CaseApplication = z.infer<typeof CaseApplicationSchema>;
+
+const CaseBatchEntrySchema = z.object({
+  clientId: z.string().trim().min(1).max(100),
+  scenarioId: z.string().trim().min(1).max(100),
+  replacesCaseId: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .optional()
+    .nullable()
+    .transform((value) => value ?? undefined),
+  title: z.string().trim().min(1).max(300),
+  description: z.string().trim().min(1).max(5000),
+  preconditions: z.string().max(5000),
+  steps: z
+    .array(TestStepSchema.omit({ id: true }))
+    .min(1)
+    .max(50),
+});
+const validateBatchIds = (value: { testCases: Array<{ clientId: string; replacesCaseId?: string }> }, context: z.RefinementCtx) => {
+  if (new Set(value.testCases.map((item) => item.clientId)).size !== value.testCases.length)
+    context.addIssue({ code: "custom", message: "Duplicate generated test case IDs." });
+  const targets = value.testCases.flatMap((item) => (item.replacesCaseId ? [item.replacesCaseId] : []));
+  if (new Set(targets).size !== targets.length) context.addIssue({ code: "custom", message: "Multiple revisions for one test case." });
+};
+const checkBatchBytes = (value: unknown, limit: number, context: z.RefinementCtx) => {
+  if (new TextEncoder().encode(JSON.stringify(value)).length > limit)
+    context.addIssue({ code: "custom", message: "Test case response exceeds the content-size budget." });
+};
+/** A single provider response has its own bounded count and byte budget. */
+export const CaseBatchResponseSchema = z
+  .object({ testCases: z.array(CaseBatchEntrySchema).max(MAX_CASES_PER_RESPONSE) })
+  .superRefine((value, context) => {
+    validateBatchIds(value, context);
+    checkBatchBytes(value, MAX_CASE_RESPONSE_BYTES, context);
+  });
+/** A stored run may contain every legal chunk; storage capacity is applied separately and reported explicitly. */
+export const CaseBatchResultSchema = z
+  .object({
+    application: CaseApplicationSchema.optional(),
+    incomplete: z
+      .object({ completedChunks: z.number().int().nonnegative(), totalChunks: z.number().int().positive(), reason: z.string().max(100) })
+      .optional(),
+    testCases: z.array(CaseBatchEntrySchema).max(MAX_CASE_CHUNKS * MAX_CASES_PER_RESPONSE),
+  })
+  .superRefine((value, context) => {
+    validateBatchIds(value, context);
+    checkBatchBytes(value, MAX_CASE_RESULT_BYTES, context);
+  });
+// Batch results precede the earlier single-coverage shape so stored history keeps parsing.
+export const AnalysisRunResultSchema = z.union([AnalysisResultSchema, CaseBatchResultSchema, CaseGenerationResultSchema]);
 export type CaseGenerationInput = z.infer<typeof CaseGenerationInputSchema>;
 export type CaseGenerationResult = z.infer<typeof CaseGenerationResultSchema>;
+export type CaseBatchInput = z.infer<typeof CaseBatchInputSchema>;
+export type CaseBatchResult = z.infer<typeof CaseBatchResultSchema>;
 
 export type Testpaq = z.infer<typeof TestpaqSchema>;
 export type Scenario = z.infer<typeof ScenarioSchema>;
@@ -338,10 +413,11 @@ export type TestpaqSummary = Pick<Testpaq, "id" | "title" | "groupId" | "status"
 
 // Historical inputs retain their recorded decisions; current authoring rules do not rewrite history.
 export const HistoricalAnalysisInputSchema = AnalysisInputSchema.extend({
+  updateCaseIds: z.array(z.uuid()).max(500).optional(),
   requirements: z.array(RequirementFieldsSchema).max(500),
   scenarios: z.array(ScenarioFieldsSchema).max(1000).optional(),
   questions: z.array(QuestionFieldsSchema).max(500).optional(),
-  testCases: z.array(TestCaseFieldsSchema).max(3000).optional(),
+  testCases: z.array(TestCaseFieldsSchema).max(MAX_TEST_CASES).optional(),
 });
 export const AnalysisRunSchema = z.object({
   id: z.uuid(),

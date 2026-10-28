@@ -15,6 +15,7 @@ import {
 
 import { caseContentIssues, isDraftText, scenarioContentIssues } from "../src/shared/authoring.js";
 import { acquireDatabaseLock } from "./database-lock.js";
+import { compactTestpaqSignatures } from "../src/shared/test-cases.js";
 
 type DatabaseInstance = InstanceType<typeof Database>;
 
@@ -261,11 +262,11 @@ export class TestpaqStore {
 
   get(id: string): Testpaq | undefined {
     const row = this.database.prepare("SELECT payload FROM testpaqs WHERE id = ?").get(id) as { payload: string } | undefined;
-    return row ? TestpaqSchema.parse(JSON.parse(row.payload)) : undefined;
+    return row ? compactTestpaqSignatures(TestpaqSchema.parse(JSON.parse(row.payload))) : undefined;
   }
 
   save(input: Testpaq): Testpaq {
-    const item = TestpaqSchema.parse(input);
+    const item = compactTestpaqSignatures(TestpaqSchema.parse(input));
     if (item.groupId && !this.listGroups().some((group) => group.id === item.groupId)) throw new Error("Unknown project group.");
     this.database
       .prepare(
@@ -311,11 +312,11 @@ export class TestpaqStore {
     return this.getRun(id)!;
   }
 
-  failRun(id: string, errorCode: string): AnalysisRun {
+  failRun(id: string, errorCode: string, result?: unknown): AnalysisRun {
     const completedAt = new Date().toISOString();
     this.database
-      .prepare("UPDATE analysis_runs SET status='failed', error_code=?, completed_at=? WHERE id=?")
-      .run(errorCode, completedAt, id);
+      .prepare("UPDATE analysis_runs SET status='failed', error_code=?, completed_at=?, result_json=COALESCE(?,result_json) WHERE id=?")
+      .run(errorCode, completedAt, result === undefined ? null : JSON.stringify(AnalysisRunResultSchema.parse(result)), id);
     return this.getRun(id)!;
   }
 
