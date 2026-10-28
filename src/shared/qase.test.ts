@@ -30,7 +30,7 @@ function parseCsv(csv: string): string[][] {
   return rows;
 }
 
-describe("Qase native CSV export", () => {
+describe("Qase CSV export", () => {
   it("includes only accepted Qase and historical automation selections, deduplicating dual selections", () => {
     const item = makeFixture();
     item.scenarios.forEach((scenario) => {
@@ -52,39 +52,45 @@ describe("Qase native CSV export", () => {
     }));
     const rows = parseCsv(renderQaseCsv(item));
     expect(rows[0]).toEqual(QASE_HEADERS);
+    // Legacy header: never the V2 `v2.id` first column, which would require per-step quoting.
+    expect(rows[0][0]).toBe("id");
     expect(rows).toHaveLength(4);
     const automation = QASE_HEADERS.indexOf("automation");
     expect(rows.slice(1).map((row) => row[automation])).toEqual(["is-not-automated", "to-be-automated", "to-be-automated"]);
     expect(rows.slice(1).every((row) => row[0] === "" && row.length === QASE_HEADERS.length)).toBe(true);
   });
-  it("preserves Unicode, quotes, commas and multiline outcomes through both CSV layers", () => {
+  it("exports only test content as plain numbered legacy-style steps", () => {
     const item = makeFixture();
     const scenario = item.scenarios[0];
     item.scenarios = [scenario];
     item.questions = [];
     scenario.review = "accepted";
     scenario.destinations.qase = true;
-    scenario.title = 'Check "£5", café';
-    scenario.expectedOutcome = 'Shows "£5", correctly\nNo extra charge';
+    scenario.rationale = "Because it matters";
+    scenario.risks = ["A risk"];
     const testCase = newTestCase(item, scenario);
-    testCase.title = scenario.title;
+    testCase.title = 'Check "£5", café';
+    testCase.objective = "Verify the amount shows correctly";
     testCase.review = "accepted";
     testCase.preconditions = "Signed in as campaign owner";
+    testCase.postconditions = "Restore the amount";
     testCase.steps = [
-      { id: crypto.randomUUID(), action: scenario.title, data: 'Amount: "£5"', expectedResult: scenario.expectedOutcome },
+      { id: crypto.randomUUID(), action: "Open the page", data: 'Amount: "£5"', expectedResult: "Shows\nthe amount" },
       { id: crypto.randomUUID(), action: "Reload the page", data: "", expectedResult: "Preference persists" },
     ];
     item.testCases = [testCase];
     const csv = renderQaseCsv(item);
     const [headers, row] = parseCsv(csv);
     const field = (name: string) => row[headers.indexOf(name)];
-    expect(field("title")).toBe(scenario.title);
-    expect(field("steps_actions")).toBe('1. "Check ""£5"", café"\n2. "Reload the page"');
-    expect(field("steps_result")).toBe('1. "Shows ""£5"", correctly\nNo extra charge"\n2. "Preference persists"');
-    expect(field("steps_data")).toBe('1. "Amount: ""£5"""\n2. ""');
-    expect(field("preconditions")).toBe(testCase.preconditions);
-    expect(field("description")).toContain(testCase.id);
-    expect(field("description")).toContain(item.requirements[0].text);
+    expect(field("title")).toBe('Check "£5", café');
+    expect(field("description")).toBe("Verify the amount shows correctly");
+    expect(field("preconditions")).toBe("Signed in as campaign owner");
+    expect(headers).not.toContain("postconditions");
+    expect(field("steps_actions")).toBe("1. Open the page\n2. Reload the page");
+    expect(field("steps_results")).toBe("1. Shows the amount\n2. Preference persists");
+    expect(field("steps_data")).toBe('1. Amount: "£5"');
+    for (const leaked of [testCase.id, scenario.id, item.title, scenario.rationale, "A risk", item.requirements[0].text])
+      expect(csv).not.toContain(leaked);
     expect(renderQaseCsv(item)).toBe(csv);
   });
   it("exports only the template when nothing is selected without mutating state", () => {

@@ -96,7 +96,8 @@ export function ReviewPanel({
     });
   };
   const activeFocusedId = visible.some((scenario) => scenario.id === focusedId) ? focusedId : visible[0]?.id;
-  const activeIds = selected.size ? [...selected] : activeFocusedId ? [activeFocusedId] : [];
+  const selectedIds = visible.filter((value) => selected.has(value.id)).map((value) => value.id);
+  const activeIds = selectedIds.length ? selectedIds : activeFocusedId ? [activeFocusedId] : [];
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
@@ -142,7 +143,15 @@ export function ReviewPanel({
     addEventListener("keydown", handler);
     return () => removeEventListener("keydown", handler);
   });
-  const addScenario = () =>
+  const addScenario = () => {
+    setSelected(new Set());
+    // Reveal the new human-authored proposal without disturbing filters that already admit it.
+    if (originFilter !== "all" && originFilter !== "human") setOriginFilter("all");
+    if (reviewFilter !== "all" && reviewFilter !== "proposed") setReviewFilter("all");
+    if (categoryFilter !== "all" && categoryFilter !== "other") setCategoryFilter("all");
+    if (destinationFilter !== "all" && destinationFilter !== "manual") setDestinationFilter("all");
+    if (riskOnly) setRiskOnly(false);
+    if (query) setQuery("");
     update((draft) => {
       const timestamp = new Date().toISOString();
       const scenario: Scenario = {
@@ -163,9 +172,11 @@ export function ReviewPanel({
       setExpanded(scenario.id);
       return draft;
     });
+  };
   return (
     <div className="review-layout">
-      <aside className="review-sidebar">
+      <details className="review-sidebar">
+        <summary>Filter coverage</summary>
         <p className="eyebrow">View</p>
         <p className="eyebrow">Origin</p>
         {(["all", "explicit", "inferred", "human"] as const).map((value) => (
@@ -185,12 +196,12 @@ export function ReviewPanel({
           <strong>{uncoveredCount(item)}</strong>
           <span>requirements without accepted coverage</span>
         </div>
-      </aside>
+      </details>
       <div className="review-main">
         <div className="content-heading review-heading">
           <div>
-            <p className="eyebrow">Human review</p>
-            <h2>Scenarios</h2>
+            <p className="eyebrow">Step 3 · Approve or decline</p>
+            <h2>Coverage approval</h2>
             <p>{visible.length} shown · Suggestions remain proposals until you decide.</p>
           </div>
           <Button disabled={readOnly} icon={<Plus size={16} />} onClick={addScenario}>
@@ -246,7 +257,7 @@ export function ReviewPanel({
               })
             }
           >
-            {visible.length > 0 && visible.every((scenario) => selected.has(scenario.id)) ? "Deselect shown" : "Select shown"}
+            {visible.length > 0 && visible.every((scenario) => selected.has(scenario.id)) ? "Deselect all shown" : "Select all shown"}
           </button>
           <div className="shortcut-hints">
             <span>
@@ -263,13 +274,13 @@ export function ReviewPanel({
             </span>
           </div>
         </div>
-        {selected.size > 0 && !readOnly && (
+        {selectedIds.length > 0 && !readOnly && (
           <div className="bulkbar">
-            <strong>{selected.size} selected</strong>
+            <strong>{selectedIds.length} selected</strong>
             <button
-              disabled={item.scenarios.some((value) => selected.has(value.id) && scenarioContentIssues(value).length > 0)}
+              disabled={item.scenarios.some((value) => selectedIds.includes(value.id) && scenarioContentIssues(value).length > 0)}
               onClick={() =>
-                mutate([...selected], (scenario) => {
+                mutate(selectedIds, (scenario) => {
                   scenario.review = "accepted";
                 })
               }
@@ -279,7 +290,7 @@ export function ReviewPanel({
             </button>
             <button
               onClick={() =>
-                mutate([...selected], (scenario) => {
+                mutate(selectedIds, (scenario) => {
                   scenario.review = "rejected";
                 })
               }
@@ -289,7 +300,7 @@ export function ReviewPanel({
             </button>
             <button
               onClick={() =>
-                mutate([...selected], (scenario) => {
+                mutate(selectedIds, (scenario) => {
                   scenario.destinations.manual = true;
                 })
               }
@@ -298,7 +309,7 @@ export function ReviewPanel({
             </button>
             <button
               onClick={() =>
-                mutate([...selected], (scenario) => {
+                mutate(selectedIds, (scenario) => {
                   scenario.destinations.qase = true;
                 })
               }

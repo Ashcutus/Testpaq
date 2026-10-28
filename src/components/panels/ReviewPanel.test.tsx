@@ -2,8 +2,21 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeFixture } from "../../../server/fixture";
 import { ReviewPanel } from "./ReviewPanel";
+import { useState } from "react";
 
 describe("scenario review", () => {
+  it("reveals a new proposal when existing filters would hide it", () => {
+    function Harness() {
+      const [item, setItem] = useState(makeFixture());
+      return <ReviewPanel item={item} update={(recipe) => setItem((current) => recipe(structuredClone(current)))} />;
+    }
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: /^Accepted/ }));
+    fireEvent.change(screen.getByLabelText("Search scenarios"), { target: { value: "Owner" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add scenario" }));
+    expect(screen.getByDisplayValue("New QA scenario")).toBeInTheDocument();
+    expect(screen.getByLabelText("Search scenarios")).toHaveValue("");
+  });
   afterEach(cleanup);
   it("exposes origin, destinations, and keyboard review", () => {
     let item = makeFixture();

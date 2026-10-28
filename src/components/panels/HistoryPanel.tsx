@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { Button } from "../ui/Button";
 import { api } from "../../lib/api";
 import { formatRelative, label } from "../../lib/utils";
-import type { AnalysisRun } from "../../shared/domain";
+import type { AnalysisRun, CaseBatchResult } from "../../shared/domain";
 
 export function HistoryPanel({ testpaqId, version }: { testpaqId: string; version: number }) {
   const [loading, setLoading] = useState(true);
@@ -72,13 +72,19 @@ export function HistoryPanel({ testpaqId, version }: { testpaqId: string; versio
       {loading && <p role="status">Loading history…</p>}
       <div className="history-list">
         {runs.map((run) => {
-          const displayStatus = run.errorCode === "cancelled" ? "cancelled" : run.status;
+          const application = run.result && "application" in run.result ? run.result.application : undefined;
+          const partial =
+            application &&
+            (application.missingUpdateCaseIds.length ||
+              application.capacitySkippedNewCases ||
+              application.capacitySkippedUpdateCaseIds.length);
+          const displayStatus = partial ? "partial" : run.errorCode === "cancelled" ? "cancelled" : run.status;
           return (
             <article className="history-row" key={run.id}>
               <span className={`history-icon history-${displayStatus}`}>
                 {displayStatus === "succeeded" ? (
                   <CheckCircle2 size={17} />
-                ) : run.status === "failed" ? (
+                ) : run.status === "failed" || partial ? (
                   <AlertCircle size={17} />
                 ) : (
                   <LoaderCircle className="spin" size={17} />
@@ -97,10 +103,16 @@ export function HistoryPanel({ testpaqId, version }: { testpaqId: string; versio
                 {run.result && (
                   <p>
                     {"testCases" in run.result
-                      ? `${run.result.testCases.length} case proposals prepared for review`
+                      ? caseRunSummary(run)
                       : `${run.result.requirements.length} requirement suggestions · ${run.result.scenarios.length} coverage suggestions · ${run.result.questions.length} questions returned`}
                   </p>
                 )}
+                {run.result && "incomplete" in run.result && run.result.incomplete && <ReturnedDrafts drafts={run.result.testCases} />}
+                {application &&
+                  (application.capacitySkippedNewCases > 0 || application.capacitySkippedUpdateCaseIds.length > 0) &&
+                  run.result &&
+                  "application" in run.result &&
+                  !run.result.incomplete && <ReturnedDrafts drafts={run.result.testCases} />}
                 <details>
                   <summary>Run details</summary>
                   <small>
@@ -181,4 +193,58 @@ export function HistoryPanel({ testpaqId, version }: { testpaqId: string; versio
       )}
     </div>
   );
+}
+
+function ReturnedDrafts({ drafts }: { drafts: CaseBatchResult["testCases"] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <details onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>View returned drafts, including cases not saved</summary>
+      {open &&
+        drafts.map((value) => (
+          <section key={value.clientId}>
+            <h4>{value.title}</h4>
+            <p>{value.description}</p>
+            {value.preconditions && <p>Preconditions: {value.preconditions}</p>}
+            <ol>
+              {value.steps.map((step, index) => (
+                <li key={index}>
+                  {step.action}
+                  {step.data && <p>Data: {step.data}</p>}
+                  <p>Expected: {step.expectedResult}</p>
+                </li>
+              ))}
+            </ol>
+          </section>
+        ))}
+    </details>
+  );
+}
+
+/** A case run records what was asked for as well as what came back, so partial updates stay visible in history. */
+function caseRunSummary(run: AnalysisRun) {
+  const returned = run.result && "testCases" in run.result ? run.result.testCases : [];
+  if (run.result && "incomplete" in run.result && run.result.incomplete) {
+    const { completedChunks, totalChunks } = run.result.incomplete;
+    return `${returned.length} returned drafts retained; no cases saved (${completedChunks} of ${totalChunks} AI requests completed)`;
+  }
+  const application = run.result && "application" in run.result ? run.result.application : undefined;
+  if (application) {
+    const { added, revised, missingUpdateCaseIds, capacitySkippedNewCases, capacitySkippedUpdateCaseIds } = application;
+    return [
+      `${added} new cases and ${revised} update proposals saved`,
+      ...(missingUpdateCaseIds.length ? [`${missingUpdateCaseIds.length} requested updates not returned`] : []),
+      ...(capacitySkippedNewCases || capacitySkippedUpdateCaseIds.length
+        ? [
+            `3,000-case limit: ${capacitySkippedNewCases} new cases and ${capacitySkippedUpdateCaseIds.length} update proposals not saved; returned drafts retained below`,
+          ]
+        : []),
+    ].join(" · ");
+  }
+  const requested = run.inputSnapshot?.updateCaseIds ?? [];
+  const revisions = new Set(returned.flatMap((value) => ("replacesCaseId" in value && value.replacesCaseId ? [value.replacesCaseId] : [])));
+  const updates = requested.length
+    ? ` · ${requested.filter((id) => revisions.has(id)).length} of ${requested.length} requested updates returned`
+    : "";
+  return `${returned.length} case proposals prepared for review${updates}`;
 }

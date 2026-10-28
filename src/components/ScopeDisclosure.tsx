@@ -50,8 +50,7 @@ export function ScopeDisclosure({ input }: { input: AnalysisInput }) {
               {value.title} ({value.review})
             </strong>
             <p>{value.objective}</p>
-            <p>Setup: {value.preconditions || "Not supplied"}</p>
-            <p>Cleanup: {value.postconditions || "Not supplied"}</p>
+            <p>Preconditions: {value.preconditions || "Not supplied"}</p>
             <ol>
               {value.steps.map((step) => (
                 <li key={step.id}>
@@ -59,7 +58,6 @@ export function ScopeDisclosure({ input }: { input: AnalysisInput }) {
                 </li>
               ))}
             </ol>
-            {!!value.unknowns.length && <p>Missing details: {value.unknowns.join("; ")}</p>}
           </article>
         ))}
       </details>

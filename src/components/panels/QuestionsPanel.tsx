@@ -1,5 +1,4 @@
 import { CheckCircle2, CircleSlash2, HelpCircle, Plus, RotateCcw } from "lucide-react";
-import { useState } from "react";
 import { isDraftText } from "../../shared/authoring";
 import { label } from "../../lib/utils";
 import type { Question, Testpaq } from "../../shared/domain";
@@ -10,24 +9,19 @@ import { Button } from "../ui/Button";
 export function QuestionsPanel({
   item,
   update,
-  onRefresh,
-  onReviewCases,
   readOnly = false,
 }: {
   item: Testpaq;
   update: (recipe: (item: Testpaq) => Testpaq) => void;
-  onRefresh?: () => void;
-  onReviewCases?: (questionId?: string) => void;
   readOnly?: boolean;
 }) {
-  const [refreshOpen, setRefreshOpen] = useState(false);
-  const [answeredId, setAnsweredId] = useState<string>();
   const requirementNumbers = activeRequirementNumbers(item);
   const [filter, setFilter] = useRememberedState<Question["status"] | "all">(`${item.id}:questions-filter`, "open", (value) =>
     ["all", "open", "resolved", "dismissed"].includes(String(value)),
   );
   const visible = item.questions.filter((question) => filter === "all" || question.status === filter);
-  const add = () =>
+  const add = () => {
+    if (filter !== "all" && filter !== "open") setFilter("open");
     update((draft) => {
       draft.questions.push({
         id: crypto.randomUUID(),
@@ -38,6 +32,7 @@ export function QuestionsPanel({
       });
       return draft;
     });
+  };
   const setStatus = (id: string, status: Question["status"]) => {
     if (
       status === "resolved" &&
@@ -45,10 +40,6 @@ export function QuestionsPanel({
         isDraftText(item.questions.find((value) => value.id === id)!.text, "New QA question"))
     )
       return;
-    if (status === "resolved") {
-      setRefreshOpen(true);
-      setAnsweredId(id);
-    }
     update((draft) => {
       const question = draft.questions.find((value) => value.id === id)!;
       question.status = status;
@@ -205,38 +196,6 @@ export function QuestionsPanel({
         ))}
         {!visible.length && <div className="inline-empty">No {filter === "all" ? "" : filter} questions.</div>}
       </div>
-      {refreshOpen && (
-        <section className="feedback-actions" aria-label="Question feedback actions" role="status">
-          <h3>Questions answered</h3>
-          <p>This feedback may change coverage or linked cases. Review the affected scope when ready.</p>
-          <div className="button-group">
-            <Button variant="ghost" onClick={() => setRefreshOpen(false)}>
-              Later
-            </Button>
-            {onReviewCases && (
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setRefreshOpen(false);
-                  onReviewCases(answeredId);
-                }}
-              >
-                Review affected cases
-              </Button>
-            )}
-            <Button
-              disabled={!onRefresh}
-              onClick={() => {
-                setRefreshOpen(false);
-                onRefresh?.();
-              }}
-            >
-              Refresh Testpaq
-            </Button>
-          </div>
-          <p>Your answers are saved locally. AI refresh still requires confirmation.</p>
-        </section>
-      )}
     </div>
   );
 }

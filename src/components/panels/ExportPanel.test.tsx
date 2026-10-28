@@ -26,7 +26,7 @@ describe("export handoff", () => {
   });
   it("downloads the Qase format before recording export completion", async () => {
     const events: string[] = [];
-    const onExport = vi.fn(async () => "v2.id,title\r\n");
+    const onExport = vi.fn(async () => "id,title\r\n");
     const onExported = vi.fn(async () => {
       events.push("recorded");
     });

@@ -1,5 +1,5 @@
-import { eligibleCases, caseNeedsReview } from "./test-cases.js";
-import type { Testpaq } from "./domain.js";
+import { eligibleCases } from "./test-cases.js";
+import type { TestCase, Testpaq } from "./domain.js";
 
 const label = (value: string) => value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 const safe = (value: string) => value.replaceAll("\r", "").trim();
@@ -14,7 +14,6 @@ export function renderMarkdown(testpaq: Testpaq, includeRejected = false): strin
   const answeredQuestions = testpaq.questions.filter((question) => question.status === "resolved" && question.resolution?.trim());
   const risks = [...new Set(accepted.flatMap((scenario) => scenario.risks))];
   const exportCases = eligibleCases(testpaq);
-  const ready = new Set(exportCases.map((value) => value.id));
   const lines = [
     `# QA coverage: ${safe(testpaq.title)}`,
     "",
@@ -56,29 +55,10 @@ export function renderMarkdown(testpaq: Testpaq, includeRejected = false): strin
           ];
         })
       : ["No scenarios have been accepted.", ""]),
-    "## Linked test cases",
+    "## Test cases",
     "",
     ...(exportCases.length
-      ? exportCases.flatMap((value) => [
-          `### ${safe(value.title)}`,
-          "",
-          `- **Case ID:** ${value.id}`,
-          `- **Coverage output:** ${safe(testpaq.scenarios.find((scenario) => scenario.id === value.scenarioId)?.title ?? "Unknown")}`,
-          `- **Review:** ${label(value.review)}${caseNeedsReview(testpaq, value) ? " (scope review needed)" : ""}`,
-          `- **Handoff:** ${ready.has(value.id) ? "Reviewed and current" : "Not ready"}`,
-          `- **Destinations:** ${value.destinations.qase ? "Qase CSV" : ""}${value.destinations.automation ? " · To be automated" : ""}${value.destinations.manual ? " · Manual" : ""}`,
-          `- **Objective:** ${safe(value.objective)}`,
-          `- **Preconditions:** ${safe(value.preconditions) || "None specified"}`,
-          `- **Postconditions:** ${safe(value.postconditions) || "None specified"}`,
-          ...value.unknowns.map((unknown) => `- **Missing detail:** ${safe(unknown)}`),
-          "",
-          ...value.steps.flatMap((step, index) => [
-            `${index + 1}. ${safe(step.action)}`,
-            `   - Data: ${safe(step.data) || "None specified"}`,
-            `   - Expected: ${safe(step.expectedResult)}`,
-          ]),
-          "",
-        ])
+      ? exportCases.flatMap((value) => renderCaseMarkdown(value, "###"))
       : ["No current, accepted test cases are ready for handoff. Accepted scenarios describe coverage intent.", ""]),
     "## Uncovered requirements",
     "",
@@ -114,4 +94,26 @@ export function activeRequirementNumbers(testpaq: Testpaq): Map<string, number> 
       .filter(([requirement]) => requirement.active)
       .map(([requirement, number]) => [requirement.id, number]),
   );
+}
+
+/** A case as a tester needs it: title, description, preconditions and steps. Nothing else. */
+export function renderCaseMarkdown(value: TestCase, heading: "#" | "##" | "###" = "##"): string[] {
+  return [
+    `${heading} ${safe(value.title)}`,
+    "",
+    ...(safe(value.objective) ? [safe(value.objective), ""] : []),
+    ...(safe(value.preconditions) ? [`**Preconditions:** ${safe(value.preconditions)}`, ""] : []),
+    ...value.steps.flatMap((step, index) => [
+      `${index + 1}. ${safe(step.action)}`,
+      ...(safe(step.data) ? [`   - Data: ${safe(step.data)}`] : []),
+      `   - Expected: ${safe(step.expectedResult)}`,
+    ]),
+    "",
+  ];
+}
+
+/** The Manual download: reviewed cases only, with no coverage, requirement or review commentary. */
+export function renderManualCases(cases: TestCase[]): string {
+  const lines = cases.length ? cases.flatMap((value) => renderCaseMarkdown(value)) : ["No reviewed test cases are ready for handoff.", ""];
+  return `${lines.join("\n").trim()}\n`;
 }
